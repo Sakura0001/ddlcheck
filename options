@@ -1,0 +1,156 @@
+# ============================================================================
+# ddlcheck / MySQL Stress Test - All Command-Line Options
+# ============================================================================
+#
+# Usage:
+#   java -jar ddlcheck.jar [global-options] mysql [mysql-options]
+#
+# Example (stress mode, 10 databases × 1 thread each = 10 total):
+#   java -jar ddlcheck.jar \
+#     --username=root --password=Taurus_123 --host=127.0.0.1 --port=3306 \
+#     --num-threads=10 --num-tries=10 --num-queries=5000 \
+#     --timeout-seconds=300 --log-each-select=true \
+#     mysql \
+#     --oracle=STRESS \
+#     --stress-enable=true \
+#     --stress-threads-per-db=1 \
+#     --stress-ddl-per-thread=4 \
+#     --stress-dml-per-thread=20 \
+#     --stress-query-per-thread=20 \
+#     --stress-schema-refresh-interval=20 \
+#     --stress-log-each-sql=true \
+#     --stress-warn-error-code=168
+#
+# Example (stress mode, 30 databases × 4 threads each = 120 effective workers):
+#   java -jar ddlcheck.jar \
+#     --username=root --password=Taurus_123 --host=127.0.0.1 --port=3306 \
+#     --num-threads=30 --num-tries=30 --num-queries=10000 \
+#     --timeout-seconds=600 \
+#     mysql \
+#     --oracle=STRESS \
+#     --stress-enable=true \
+#     --stress-threads-per-db=4 \
+#     --stress-ddl-per-thread=6 \
+#     --stress-dml-per-thread=30 \
+#     --stress-query-per-thread=30 \
+#     --stress-schema-refresh-interval=25 \
+#     --stress-log-each-sql=true \
+#     --stress-warn-error-code=168
+#
+
+# ============================================================================
+# [Global Options] - applicable to all DBMS
+# ============================================================================
+
+# Connection
+--username=root                          # DB username (default: root)
+--password=Taurus_123                    # DB password (default: Taurus_123)
+--host=127.0.0.1                         # DB host (default: localhost)
+--port=3306                              # DB port (default: -1, uses DBMS default)
+
+# Threading & Execution
+--num-threads=16                         # Concurrent threads testing separate databases (default: 16)
+--num-tries=100                          # How many database instances to create in total (default: 100)
+--num-queries=100000                     # Queries per database before recreating (default: 100000)
+--timeout-seconds=-1                     # Global timeout in seconds, -1=unlimited (default: -1)
+--max-generated-databases=-1             # Max databases per thread, -1=unlimited (default: -1)
+--random-seed=-1                         # Random seed, -1=use system time (default: -1)
+
+# Logging
+--log-each-select=true                   # Log every statement issued (default: true)
+--log-execution-time=true                # Log execution time per statement (default: true)
+--print-failed=false                     # Log failed statements (default: false)
+--print-progress-information=true        # Print throughput progress every 5s (default: true)
+--print-progress-summary=false           # Print summary on exit (default: false)
+--print-statements=false                 # Print all statements to stdout (default: false)
+--print-succeeding-statements=false      # Print only successful statements to stdout (default: false)
+
+# SQL Generation
+--max-num-inserts=30                     # How many INSERT statements to issue (default: 30)
+--max-expression-depth=3                 # Max depth of randomly-generated expressions (default: 3)
+--num-statement-kind-retries=1000        # Retries for a specific statement kind (default: 1000)
+--random-string-generation=SOPHISTICATED # String generation strategy (default: SOPHISTICATED)
+--string-constant-max-length=10          # Max length of generated string constants (default: 10)
+--use-constant-caching=true              # Cache and reuse constants (default: true)
+--constant-cache-size=100                # Size of the constant cache (default: 100)
+--max-production-recursion=3             # Max grammar production recursion depth (default: 3)
+
+# Grammar
+--grammar-path=                          # Custom grammar path (default: built-in per DBMS)
+--generator-config-path=                 # Custom Lua config path (default: built-in per DBMS)
+
+# Database
+--database-prefix=database               # Prefix for created database names (default: database)
+--use-connection-test=true               # Test connection before multi-thread run (default: true)
+--canonicalize-sql-strings=true          # Add ';' to query strings (default: true)
+--validate-result-size-only=false        # Only validate result size, skip content (default: false)
+--test-only-nonempty-tables=false        # Only test tables with at least one row (default: false)
+
+# Exit
+--exit-code-error=-1                     # Exit code on error/bug found (default: -1)
+--help                                   # Print help
+
+# Experimental - QPG
+--qpg-enable=false                       # Enable Query Plan Guidance (default: false)
+--qpg-log-query-plan=false               # Log query plans (default: false)
+--qpg-max-interval=1000                  # Max iterations to mutate if no new plans (default: 1000)
+--qpg-reward-weight=0.25                 # Weight of last reward in average (default: 0.25)
+--qpg-selection-probability=0.7          # Probability of random mutator selection (default: 0.7)
+
+# Experimental - Reducer
+--use-reducer=false                      # Enable statement reducer (default: false)
+--reduce-ast=false                       # Enable AST reduction after statement reduction (default: false)
+--statement-reducer-max-steps=-1         # Max reducer steps, -1=unlimited (default: -1)
+--statement-reducer-max-time=-1          # Max reducer time (secs), -1=unlimited (default: -1)
+--ast-reducer-max-steps=-1               # Max AST reducer steps, -1=unlimited (default: -1)
+--ast-reducer-max-time=-1                # Max AST reducer time (secs), -1=unlimited (default: -1)
+
+# Experimental - Duplicate Detection
+--duplicate-detection=false              # Find 5 most similar test cases (default: false)
+--recalculate-weight=false               # Recalculate similarity weights (default: false)
+
+# Experimental - Transaction
+--use-fixed-num-transaction=false        # Use fixed number of transactions (default: false)
+--num-transaction=2                      # Number of transactions per database (default: 2)
+--num-schedule=10                        # Schedules per transaction group (default: 10)
+--case-file=                             # Input file for specified case (default: empty)
+--execute-time-minutes=10                # Time to generate/execute transactions (default: 10)
+--pqs-test-aggregates=false              # Test aggregate functions with single-row tables (default: false)
+
+# ============================================================================
+# [MySQL-Specific Options] - placed after "mysql" subcommand
+# ============================================================================
+
+# Oracle Selection
+--oracle=STRESS                          # Oracle type: STRESS or EQUATION (default: STRESS)
+                                         #   STRESS  = single-database stress test (benchmarking)
+                                         #   EQUATION = DDL equivalence checking (legacy)
+
+# Stress Mode Control
+--stress-enable=true                     # Enable stress mode (default: true)
+--stress-threads-per-db=1               # How many worker threads test each database concurrently (default: 1)
+                                         #   1 = single thread per database (each outer thread works alone)
+                                         #   4 = 4 workers per database (e.g. --num-threads=30 → 30 DBs × 4 workers = 120 effective threads)
+                                         #   Worker crashes → auto-reconnect and continue, won't interrupt the whole database test
+
+# Workload Per Thread Per Round
+--stress-ddl-per-thread=4                # DDL statements per worker per round (default: 4)
+                                         #   CREATE TABLE, ALTER TABLE, DROP TABLE, CREATE INDEX, etc.
+--stress-dml-per-thread=20               # DML statements per worker per round (default: 20)
+                                         #   INSERT, UPDATE, DELETE, REPLACE
+--stress-query-per-thread=20             # Query statements per worker per round (default: 20)
+                                         #   SELECT with various joins, subqueries, window functions, CTEs
+
+# Schema Metadata Refresh
+--stress-schema-refresh-interval=20      # Refresh schema every N successful statements (default: 20)
+                                         #   Higher = better throughput, lower = more accurate schema info
+                                         #   Forced refresh between DDL/DML/QUERY phases automatically
+
+# Logging & Monitoring
+--stress-log-each-sql=true               # Log every SQL with timestamp/thread/db/result (default: true)
+                                         #   Format: [time] [thread=X] [db=Y] [kind=DDL|DML|QUERY] SUCCESS|FAIL(code=N,msg=...) | SQL
+--stress-warn-error-code=168             # Alert on this MySQL error code (default: 168)
+                                         #   Prints WARN to stderr + log when intercepted
+
+# Other
+--test-init=false                        # Initialize database state transition graph (default: false)
