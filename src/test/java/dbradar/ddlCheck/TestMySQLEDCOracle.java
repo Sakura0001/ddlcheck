@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import javax.xml.bind.DatatypeConverter;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -25,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -39,10 +42,13 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
 
     /**
      * 压测模式 - 单线程独立数据库
-     * 每个线程拥有独立的数据库实例，互不干扰
+     * 每个数据库由一个worker持续执行多轮 DDL/DML/QUERY，轮次之间重建同一个数据库名
      */
     @Test
-    public void testMySQLStressOracle() {
+    public void testMySQLStressOracle() throws IOException {
+        String databasePrefix = "mysqlstresssingle" + System.nanoTime();
+        Path stressLogPath = Path.of("logs", "mysql", databasePrefix + "0-cur.log");
+
         assertEquals(0, Main.executeMain(
                 // ============ 连接参数 ============
                 "--username", username,                        // 数据库用户名
@@ -51,48 +57,43 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
                 "--port", String.valueOf(port),                // 数据库端口号
 
                 // ============ 线程与执行控制 ============
-                "--num-threads", "5",                         // 并发线程数，每个线程测试独立的数据库
-                "--num-tries", "1000000",                           // 总共创建多少个数据库实例
-                "--num-queries", "5000",                       // 每个数据库执行多少轮查询后重建
-                "--timeout-seconds", "300",                    // 全局超时时间(秒)，-1表示不限
-                "--max-generated-databases", "-1",             // 每个线程最多生成多少个数据库，-1表示不限
+                "--num-threads", "5",                         // 1个数据库任务
+                "--timeout-seconds", "30",                    // 运行上限，防止测试卡死
 
                 // ============ 日志控制 ============
                 "--log-each-select", "true",                   // 是否记录每条执行的SQL语句
-                "--log-execution-time", "true",                // 是否记录每条SQL的执行时间
-                "--print-progress-information", "true",        // 是否每5秒打印吞吐量进度
-
-                // ============ SQL生成控制 ============
-                "--max-num-inserts", "100",                     // INSERT语句的最大数量
-                "--max-expression-depth", "3",                 // 随机生成表达式的最大嵌套深度
-                "--max-production-recursion", "3",             // 语法产生式的最大递归深度
+                "--log-execution-time", "false",               // 保留日志即可
+                "--print-progress-information", "false",       // 测试中关闭进度打印
 
                 // ============ 数据库配置 ============
-                "--database-prefix", "database",               // 创建的数据库名称前缀(如database0, database1...)
+                "--database-prefix", databasePrefix,           // 固定一个数据库名并按round反复重建
                 "--use-connection-test", "true",               // 多线程启动前是否先测试连接可用性
 
                 // ============ MySQL子命令 + MySQL专属参数 ============
                 dbName,                                        // 子命令: "mysql"
                 "--oracle", "STRESS",                          // Oracle模式: STRESS=压测模式, EQUATION=DDL等价验证
-                "--stress-enable", "true",                     // 是否启用压测模式
                 "--stress-threads-per-db", "1",                // 每个数据库分配1个worker线程(单线程模式)
-                                                               //   总有效线程 = num-threads × threads-per-db = 10×1 = 10
-                "--stress-ddl-per-thread", "120",                // 每个worker每轮执行的DDL语句数(CREATE/ALTER/DROP TABLE等)
-                "--stress-dml-per-thread", "120",               // 每个worker每轮执行的DML语句数(INSERT/UPDATE/DELETE/REPLACE)
-                "--stress-query-per-thread", "200",             // 每个worker每轮执行的查询语句数(SELECT)
-                "--stress-schema-refresh-interval", "3",      // 每隔N条成功语句刷新一次schema元信息，避免过于频繁
-                "--stress-log-each-sql", "true",               // 是否记录每条SQL的详细日志(时间/线程/库/结果/错误码)
-                "--stress-warn-error-code", "168"              // 拦截到此MySQL错误码时打印WARN告警到stderr
+                "--stress-rounds-per-db", "1000000",                // 对同一个数据库名执行2轮
+                "--stress-ddl-per-thread", "100",               // 每轮每线程执行的DDL数量
+                "--stress-dml-per-thread", "100",               // 每轮每线程执行的DML数量
+                "--stress-query-per-thread", "100"              // 每轮每线程执行的随机查询数量
         ));
+
+        assertTrue(Main.nrDatabases.get() >= 2, "single-thread stress should recreate the same database across rounds");
+        assertTrue(Files.exists(stressLogPath), "single-thread stress should create a mysql current log file");
+        assertTrue(countStressExecutionLines(stressLogPath) > 0,
+                "single-thread stress log should contain executed SQL records");
     }
 
     /**
-     * 压测模式 - 多线程多库
-     * 30个数据库，每个库4个worker线程，总共 30×4=120 个有效线程并发工作
-     * 某个worker出错会自动重连并继续测试，不会导致整个库的测试中断
+     * 压测模式 - 多线程同库
+     * 多个worker共享同一个数据库，按轮次执行 DDL/DML/QUERY
      */
     @Test
-    public void testMySQLStressMultiThread() {
+    public void testMySQLStressMultiThread() throws IOException {
+        String databasePrefix = "mysqlstressmt" + System.nanoTime();
+        Path stressLogPath = Path.of("logs", "mysql", databasePrefix + "0-cur.log");
+
         assertEquals(0, Main.executeMain(
                 // ============ 连接参数 ============
                 "--username", username,                        // 数据库用户名
@@ -101,40 +102,57 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
                 "--port", String.valueOf(port),                // 数据库端口号
 
                 // ============ 线程与执行控制 ============
-                "--num-threads", "1",                         // 数据库数量(30个库并行测试)
-                "--num-tries", "-1",                           // 总共创建30个数据库实例
-                "--num-queries", "10000",                      // 每个数据库执行10000轮后停止
-                "--timeout-seconds", "600",                    // 全局超时时间(秒)
-                "--max-generated-databases", "-1",             // 每个线程最多生成多少个数据库，-1表示不限
+                "--num-threads", "10",                         // 启动1个数据库任务
+                "--timeout-seconds", "30",                    // 集成测试限制在较短时间内完成
 
                 // ============ 日志控制 ============
                 "--log-each-select", "true",                   // 是否记录每条执行的SQL语句
-                "--log-execution-time", "true",                // 是否记录每条SQL的执行时间
-                "--print-progress-information", "true",        // 是否每5秒打印吞吐量进度
-
-                // ============ SQL生成控制 ============
-                "--max-num-inserts", "30",                     // INSERT语句的最大数量
-                "--max-expression-depth", "3",                 // 随机生成表达式的最大嵌套深度
-                "--max-production-recursion", "3",             // 语法产生式的最大递归深度
+                "--log-execution-time", "false",               // 验证日志文件生成即可，不额外记录执行时间
+                "--print-progress-information", "false",       // 测试中关闭周期性进度打印，避免后台scheduler干扰
 
                 // ============ 数据库配置 ============
-                "--database-prefix", "database",               // 创建的数据库名称前缀
+                "--database-prefix", databasePrefix,           // 使用唯一前缀，避免读取到旧日志文件
                 "--use-connection-test", "true",               // 多线程启动前是否先测试连接可用性
 
                 // ============ MySQL子命令 + MySQL专属参数 ============
                 dbName,                                        // 子命令: "mysql"
                 "--oracle", "STRESS",                          // Oracle模式: STRESS=压测模式
-                "--stress-enable", "true",                     // 是否启用压测模式
-                "--stress-threads-per-db", "4",                // 每个数据库分配4个worker线程并发操作
-                                                               //   总有效线程 = num-threads × threads-per-db = 30×4 = 120
+                "--stress-threads-per-db", "2",                // 每个数据库分配2个worker线程并发操作
+                                                               //   总有效线程 = num-threads × threads-per-db = 1×2 = 2
                                                                //   worker出错自动重连继续，不中断整个库的测试
-                "--stress-ddl-per-thread", "6",                // 每个worker每轮执行的DDL语句数
-                "--stress-dml-per-thread", "30",               // 每个worker每轮执行的DML语句数
-                "--stress-query-per-thread", "30",             // 每个worker每轮执行的查询语句数
-                "--stress-schema-refresh-interval", "25",      // 每隔25条成功语句刷新一次schema元信息
-                "--stress-log-each-sql", "true",               // 是否记录每条SQL的详细日志
-                "--stress-warn-error-code", "168"              // 拦截到此MySQL错误码时打印WARN告警
+                "--stress-rounds-per-db", "2",                // 对同一个数据库名执行2轮
+                "--stress-ddl-per-thread", "1",               // 每个worker每轮执行的DDL语句数
+                "--stress-dml-per-thread", "1",               // 每个worker每轮执行的DML语句数
+                "--stress-query-per-thread", "1"              // 每个worker每轮执行的查询语句数
         ));
+
+        long executedSqlCount = Main.nrSuccessfulActions.get() + Main.nrUnsuccessfulActions.get();
+        assertTrue(Main.nrDatabases.get() >= 2, "multi-thread stress should repeat rounds on the same database task");
+        assertTrue(executedSqlCount > 0, "stress test should execute at least one SQL statement");
+        assertTrue(Files.exists(stressLogPath), "stress test should create a mysql current log file");
+        assertTrue(countStressExecutionLines(stressLogPath) > 0,
+                "stress log should contain at least one stress SQL execution record");
+        assertTrue(countDistinctThreadNames(stressLogPath) >= 2,
+                "multi-thread stress should log SQL from multiple worker threads on the same database");
+    }
+
+    private long countStressExecutionLines(Path stressLogPath) throws IOException {
+        try (Stream<String> lines = Files.lines(stressLogPath)) {
+            return lines.filter(line -> line.contains("[kind=")
+                    && (line.contains("SUCCESS") || line.contains("FAIL(")))
+                    .count();
+        }
+    }
+
+    private long countDistinctThreadNames(Path stressLogPath) throws IOException {
+        Pattern threadPattern = Pattern.compile("\\[thread=([^\\]]+)\\]");
+        try (Stream<String> lines = Files.lines(stressLogPath)) {
+            return lines.map(threadPattern::matcher)
+                    .filter(Matcher::find)
+                    .map(matcher -> matcher.group(1))
+                    .distinct()
+                    .count();
+        }
     }
 
     /**

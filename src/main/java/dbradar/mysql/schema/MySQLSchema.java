@@ -439,6 +439,7 @@ public class MySQLSchema extends AbstractSchema<MySQLGlobalState, MySQLSchema.My
 
     private static List<MySQLForeignKey> fetchForeignKeys(SQLConnection con, String databaseName, List<MySQLTable> databaseTables) throws SQLException {
         Map<String, MySQLForeignKey> foreignKeyMap = new HashMap<>();
+        List<String> invalidForeignKeys = new ArrayList<>();
 
         try (Statement stmt = con.createStatement()) {
             ResultSet rs = stmt.executeQuery(
@@ -452,36 +453,28 @@ public class MySQLSchema extends AbstractSchema<MySQLGlobalState, MySQLSchema.My
                 String referencedTableName = rs.getString("REFERENCED_TABLE_NAME");
                 String referencedColumnName = rs.getString("REFERENCED_COLUMN_NAME");
 
+                if (invalidForeignKeys.contains(constraintName)) {
+                    continue;
+                }
+
                 MySQLForeignKey foreignKey = foreignKeyMap.get(constraintName);
-                MySQLTable table = null;
-                MySQLTable referencedTable = null;
+                MySQLTable table = findTableByName(databaseTables, tableName);
+                MySQLTable referencedTable = findTableByName(databaseTables, referencedTableName);
+                if (table == null || referencedTable == null) {
+                    foreignKeyMap.remove(constraintName);
+                    invalidForeignKeys.add(constraintName);
+                    continue;
+                }
                 if (foreignKey == null) {
-                    for (MySQLTable temp : databaseTables) {
-                        if (temp.getName().equals(tableName)) {
-                            table = temp;
-                        }
-                        if (temp.getName().equals(referencedTableName)) {
-                            referencedTable = temp;
-                        }
-                    }
                     foreignKey = new MySQLForeignKey(constraintName, table, new ArrayList<>(), referencedTable, new ArrayList<>());
                     foreignKeyMap.put(constraintName, foreignKey);
                 }
-                MySQLColumn column = null;
-                assert table != null;
-                for (MySQLColumn temp : table.getColumns()) {
-                    if (temp.getName().equals(columnName)) {
-                        column = temp;
-                        break;
-                    }
-                }
-                MySQLColumn referencedColumn = null;
-                assert referencedTable != null;
-                for (MySQLColumn temp : referencedTable.getColumns()) {
-                    if (temp.getName().equals(referencedColumnName)) {
-                        referencedColumn = temp;
-                        break;
-                    }
+                MySQLColumn column = findColumnByName(table, columnName);
+                MySQLColumn referencedColumn = findColumnByName(referencedTable, referencedColumnName);
+                if (column == null || referencedColumn == null) {
+                    foreignKeyMap.remove(constraintName);
+                    invalidForeignKeys.add(constraintName);
+                    continue;
                 }
                 foreignKey.getColumns().add(column);
                 foreignKey.getReferencedColumns().add(referencedColumn);
@@ -489,6 +482,24 @@ public class MySQLSchema extends AbstractSchema<MySQLGlobalState, MySQLSchema.My
         }
 
         return new ArrayList<>(foreignKeyMap.values());
+    }
+
+    private static MySQLTable findTableByName(List<MySQLTable> databaseTables, String tableName) {
+        for (MySQLTable table : databaseTables) {
+            if (table.getName().equals(tableName)) {
+                return table;
+            }
+        }
+        return null;
+    }
+
+    private static MySQLColumn findColumnByName(MySQLTable table, String columnName) {
+        for (MySQLColumn column : table.getColumns()) {
+            if (column.getName().equals(columnName)) {
+                return column;
+            }
+        }
+        return null;
     }
 
     private static List<MySQLIndex> getIndexes(SQLConnection con, String tableName, String databaseName)

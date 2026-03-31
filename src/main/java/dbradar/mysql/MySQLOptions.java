@@ -30,12 +30,12 @@ public class MySQLOptions implements DBMSSpecificOptions {
     @Parameter(names = "--oracle")
     public List<MySQLOracleFactory> oracles = new ArrayList<>(Arrays.asList(MySQLOracleFactory.STRESS));
 
-    @Parameter(names = "--stress-enable", description = "Enable MySQL stress mode (single database benchmarking)", arity = 1)
-    private boolean stressEnable = true;
-
     @Parameter(names = "--stress-threads-per-db", description = "How many worker threads test each database concurrently. " +
             "1=single thread per db (default). 4 with --num-threads=30 means 30 databases each tested by 4 threads = 120 effective workers.")
     private int stressThreadsPerDb = 1;
+
+    @Parameter(names = "--stress-rounds-per-db", description = "How many rounds each database runs before the task finishes")
+    private int stressRoundsPerDb = 1;
 
     @Parameter(names = "--stress-ddl-per-thread", description = "How many DDL statements each worker executes in one round")
     private int stressDDLPerThread = 4;
@@ -45,15 +45,6 @@ public class MySQLOptions implements DBMSSpecificOptions {
 
     @Parameter(names = "--stress-query-per-thread", description = "How many query statements each worker executes in one round")
     private int stressQueryPerThread = 20;
-
-    @Parameter(names = "--stress-schema-refresh-interval", description = "Refresh schema metadata every N successful statements")
-    private int stressSchemaRefreshInterval = 20;
-
-    @Parameter(names = "--stress-log-each-sql", description = "Log each SQL execution with timestamp/thread/db/result", arity = 1)
-    private boolean stressLogEachSQL = true;
-
-    @Parameter(names = "--stress-warn-error-code", description = "If this SQL error code is hit, print an explicit warning")
-    private int stressWarnErrorCode = 168;
 
     public enum MySQLOracleFactory implements OracleFactory {
         STRESS {
@@ -83,11 +74,15 @@ public class MySQLOptions implements DBMSSpecificOptions {
     }
 
     public boolean useStress() {
-        return stressEnable && getPrimaryOracle() == MySQLOracleFactory.STRESS;
+        return getPrimaryOracle() == MySQLOracleFactory.STRESS;
     }
 
     public int getStressThreadsPerDb() {
         return Math.max(1, stressThreadsPerDb);
+    }
+
+    public int getStressRoundsPerDb() {
+        return Math.max(1, stressRoundsPerDb);
     }
 
     public int getStressDDLPerThread() {
@@ -100,18 +95,6 @@ public class MySQLOptions implements DBMSSpecificOptions {
 
     public int getStressQueryPerThread() {
         return Math.max(0, stressQueryPerThread);
-    }
-
-    public int getStressSchemaRefreshInterval() {
-        return Math.max(1, stressSchemaRefreshInterval);
-    }
-
-    public boolean isStressLogEachSQL() {
-        return stressLogEachSQL;
-    }
-
-    public int getStressWarnErrorCode() {
-        return stressWarnErrorCode;
     }
 
     @Override

@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -54,7 +55,7 @@ public class MySQLStressOracle implements TestOracle {
         if (threadsPerDb > 1) {
             runConcurrentRound(options, threadsPerDb);
         } else {
-            runWorkerRound(mainState, options, new SchemaRefreshController(options.getStressSchemaRefreshInterval()));
+            runWorkerRound(mainState, options);
         }
 
         // verifySuccessRatio();
@@ -73,8 +74,16 @@ public class MySQLStressOracle implements TestOracle {
             }
             List<Future<Void>> futures = pool.invokeAll(tasks);
             for (Future<Void> future : futures) {
-                future.get();
+                try {
+                    future.get();
+                } catch (CancellationException ignored) {
+                    // Timed shutdown can cancel outstanding workers. Treat this as a graceful stop.
+                }
             }
+        } catch (InterruptedException e) {
+            // Main.executeMain uses thread interruption to stop long-running stress work after timeout.
+            // This should terminate the current round cleanly rather than be reported as a bug.
+            Thread.currentThread().interrupt();
         } finally {
             pool.shutdownNow();
         }
@@ -84,8 +93,7 @@ public class MySQLStressOracle implements TestOracle {
         MySQLGlobalState workerState = null;
         try {
             workerState = createWorkerState(workerId);
-            runWorkerRound(workerState, options,
-                    new SchemaRefreshController(options.getStressSchemaRefreshInterval()));
+            runWorkerRound(workerState, options);
         } catch (Exception e) {
             workerErrorCount.incrementAndGet();
             String dbName = mainState.getDatabaseName();
@@ -102,8 +110,7 @@ public class MySQLStressOracle implements TestOracle {
             try {
                 workerState = createWorkerState(workerId);
                 ensureAtLeastOneTable(workerState);
-                runWorkerRound(workerState, options,
-                        new SchemaRefreshController(options.getStressSchemaRefreshInterval()));
+                runWorkerRound(workerState, options);
             } catch (Exception retryEx) {
                 String retryMsg = String.format("[worker=%d] [thread=%s] [db=%s] Retry also failed: %s",
                         workerId, threadName, dbName,
@@ -144,21 +151,20 @@ public class MySQLStressOracle implements TestOracle {
         return workerState;
     }
 
-    private void runWorkerRound(MySQLGlobalState state, MySQLOptions options, SchemaRefreshController refreshController)
-            throws Exception {
+    private void runWorkerRound(MySQLGlobalState state, MySQLOptions options) throws Exception {
         ensureAtLeastOneTable(state);
-        executeBatch(state, options.getStressDDLPerThread(), StatementKind.DDL, refreshController);
-        refreshController.forceRefresh(state);
+        executeBatch(state, options.getStressDDLPerThread(), StatementKind.DDL);
         ensureAtLeastOneTable(state);
-        executeBatch(state, options.getStressDMLPerThread(), StatementKind.DML, refreshController);
-        refreshController.forceRefresh(state);
+        executeBatch(state, options.getStressDMLPerThread(), StatementKind.DML);
         ensureAtLeastOneTable(state);
-        executeBatch(state, options.getStressQueryPerThread(), StatementKind.QUERY, refreshController);
+        executeBatch(state, options.getStressQueryPerThread(), StatementKind.QUERY);
     }
 
-    private void executeBatch(MySQLGlobalState state, int count, StatementKind kind,
-                              SchemaRefreshController refreshController) throws Exception {
+    private void executeBatch(MySQLGlobalState state, int count, StatementKind kind) throws Exception {
         for (int i = 0; i < count; i++) {
+            if (kind == StatementKind.DDL || kind == StatementKind.DML) {
+                state.updateSchema();
+            }
             if ((kind == StatementKind.DML || kind == StatementKind.QUERY)
                     && state.getSchema().getDatabaseTables().isEmpty()) {
                 ensureAtLeastOneTable(state);
@@ -170,7 +176,7 @@ public class MySQLStressOracle implements TestOracle {
                 }
                 continue;
             }
-            executeWithRetries(state, query.getQueryString(), kind, query.couldAffectSchema(), refreshController);
+            executeWithRetries(state, query.getQueryString(), kind, query.couldAffectSchema());
         }
     }
 
@@ -223,8 +229,8 @@ public class MySQLStressOracle implements TestOracle {
                 "UPDATE IGNORE " + table.getName() + " SET " + column.getName() + " = " + column.getName() + " WHERE 1 = 0");
     }
 
-    private void executeWithRetries(MySQLGlobalState state, String sql, StatementKind kind, boolean canAffectSchema,
-                                    SchemaRefreshController refreshController) throws Exception {
+    private void executeWithRetries(MySQLGlobalState state, String sql, StatementKind kind, boolean canAffectSchema)
+            throws Exception {
         SQLException lastException = null;
         int attempts = 0;
         for (int retry = 0; retry < MAX_EXEC_RETRIES; retry++) {
@@ -234,7 +240,6 @@ public class MySQLStressOracle implements TestOracle {
                 Main.nrQueries.incrementAndGet();
                 Main.nrSuccessfulActions.incrementAndGet();
                 logExecution(state, sql, kind, true, null, attempts);
-                refreshController.onStatementSuccess(state, canAffectSchema);
                 return;
             } catch (SQLException e) {
                 lastException = e;
@@ -345,8 +350,7 @@ public class MySQLStressOracle implements TestOracle {
 
     private void logExecution(MySQLGlobalState state, String sql, StatementKind kind,
                               boolean success, SQLException e, int attempts) {
-        MySQLOptions options = state.getDbmsSpecificOptions();
-        if (!options.isStressLogEachSQL()) {
+        if (!state.getOptions().logEachSelect()) {
             return;
         }
         String now = LocalDateTime.now().format(TS_FORMATTER);
@@ -366,10 +370,6 @@ public class MySQLStressOracle implements TestOracle {
                 status = String.format("FAIL(code=%d,retries=%d,msg=%s)", errCode, attempts, errMsg);
             } else {
                 status = String.format("FAIL(code=%d,msg=%s)", errCode, errMsg);
-            }
-            if (errCode == options.getStressWarnErrorCode()) {
-                System.err.println(String.format("WARN: intercepted MySQL error code %d on thread=%s db=%s",
-                        errCode, threadName, dbName));
             }
         }
         String line = String.format("[%s] [thread=%s] [db=%s] [kind=%s] %s | %s",
@@ -405,35 +405,5 @@ public class MySQLStressOracle implements TestOracle {
 
     private enum StatementKind {
         DDL, DML, QUERY
-    }
-
-    static final class SchemaRefreshController {
-        private final int interval;
-        private int successSinceRefresh;
-        private int schemaAffectingSinceRefresh;
-
-        SchemaRefreshController(int interval) {
-            this.interval = Math.max(1, interval);
-        }
-
-        void onStatementSuccess(MySQLGlobalState state, boolean canAffectSchema) throws Exception {
-            successSinceRefresh++;
-            if (canAffectSchema) {
-                schemaAffectingSinceRefresh++;
-            }
-            boolean shouldRefresh = successSinceRefresh >= interval
-                    || schemaAffectingSinceRefresh >= Math.max(3, interval / 4);
-            if (shouldRefresh) {
-                state.updateSchema();
-                successSinceRefresh = 0;
-                schemaAffectingSinceRefresh = 0;
-            }
-        }
-
-        void forceRefresh(MySQLGlobalState state) throws Exception {
-            state.updateSchema();
-            successSinceRefresh = 0;
-            schemaAffectingSinceRefresh = 0;
-        }
     }
 }
