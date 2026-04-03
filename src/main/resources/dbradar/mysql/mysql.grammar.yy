@@ -1,6 +1,6 @@
 # CREATE TABLE
 create_table:
-    CREATE TABLE if_not_exist? _new_table_name (first_new_column more_new_column more_new_column more_new_column more_new_column? more_new_column? table_constraint*) table_option* partition_option?
+    CREATE TABLE if_not_exist? _new_table_name (first_new_column more_new_column more_new_column more_new_column more_new_column? more_new_column? table_constraint*) table_option*
     | CREATE TABLE if_not_exist? _new_table_name (first_new_column more_new_column more_new_column more_new_column? table_constraint*) table_option*
     | CREATE TABLE if_not_exist? _new_table_name (first_new_column more_new_column more_new_column more_new_column more_new_column more_new_column more_new_column more_new_column? table_constraint*) table_option*
 
@@ -155,69 +155,14 @@ table_option:
     | AVG_ROW_LENGTH = _int32_unsigned
     | CHECKSUM = two_value_option
     | COMPRESSION = compression_option
-    | DELAY_KEY_WRITE = two_value_option
     | ENGINE = engine_option
-    | INSERT_METHOD = insert_method_option
     | KEY_BLOCK_SIZE = _int16_unsigned
     @disable-query {CREATE TEMPORARY TABLE} # CREATE TEMPORARY TABLE is not allowed with ROW_FORMAT=COMPRESSED or KEY_BLOCK_SIZE
     | MAX_ROWS = _int32_unsigned
     | MIN_ROWS = _int32_unsigned
-    | PACK_KEYS = three_value_option
     | STATS_AUTO_RECALC = three_value_option
     | STATS_PERSISTENT = three_value_option
     | STATS_SAMPLE_PAGES = _int8_unsigned
-
-partition_option:
-    PARTITION BY partition_strategy
-    | PARTITION BY partition_strategy PARTITIONS { print(math.random(2, 8)) }
-    | PARTITION BY partition_strategy subpartition_clause?
-
-subpartition_clause:
-    SUBPARTITION BY HASH (_column)
-    | SUBPARTITION BY HASH (_column) SUBPARTITIONS { print(math.random(2, 4)) }
-    | SUBPARTITION BY LINEAR HASH (_column)
-    | SUBPARTITION BY KEY (_column)
-    | SUBPARTITION BY KEY (_column) SUBPARTITIONS { print(math.random(2, 4)) }
-
-partition_strategy:
-    HASH (_column)
-    | LINEAR HASH (_column)
-    | KEY (_column)
-    | LINEAR KEY (_column)
-    | KEY ALGORITHM = { print(math.random(1, 2)) } (_column)
-    | RANGE (_column) (partition_range_def partition_range_def_more*)
-    | RANGE COLUMNS (_column) (partition_range_columns_def partition_range_columns_def_more*)
-    | LIST (_column) (partition_list_def partition_list_def_more*)
-    | LIST COLUMNS (_column) (partition_list_columns_def partition_list_columns_def_more*)
-
-partition_range_def:
-    PARTITION _new_table_name VALUES LESS THAN (_int32_unsigned)
-    | PARTITION _new_table_name VALUES LESS THAN (MAXVALUE)
-    | PARTITION _new_table_name VALUES LESS THAN (_int32_unsigned) ENGINE = InnoDB
-
-partition_range_def_more:
-    , partition_range_def
-
-partition_range_columns_def:
-    PARTITION _new_table_name VALUES LESS THAN (_int32_unsigned)
-    | PARTITION _new_table_name VALUES LESS THAN (MAXVALUE)
-
-partition_range_columns_def_more:
-    , partition_range_columns_def
-
-partition_list_def:
-    PARTITION _new_table_name VALUES IN ((_int8_unsigned))
-    | PARTITION _new_table_name VALUES IN ((_int8_unsigned, _int8_unsigned))
-
-partition_list_def_more:
-    , partition_list_def
-
-partition_list_columns_def:
-    PARTITION _new_table_name VALUES IN ((_int8_unsigned))
-    | PARTITION _new_table_name VALUES IN ((_int8_unsigned, _int8_unsigned))
-
-partition_list_columns_def_more:
-    , partition_list_columns_def
 
 compression_option:
     'ZLIB'
@@ -238,18 +183,6 @@ engine_option:
     @disable-oracle transaction_verifier
     | MEMORY
     @disable-oracle transaction_verifier
-    | HEAP
-    @disable-oracle transaction_verifier
-    | CSV
-    @disable-oracle transaction_verifier
-    | ARCHIVE
-    @disable-query {(?i)(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY).*ARCHIVE}    # ARCHIVE does not support indexes
-    @disable-oracle transaction_verifier
-
-insert_method_option:
-    NO
-    | FIRST
-    | LAST
 
 three_value_option:
     1
@@ -323,12 +256,6 @@ alter_table:
     | alter_table_add_foreign_key
     | alter_table_rename_table
     | alter_table_option
-    | alter_table_add_partition
-    | alter_table_drop_partition
-    | alter_table_truncate_partition
-    | alter_table_coalesce_partition
-    | alter_table_remove_partitioning
-    | alter_table_rebuild_partition
     | alter_table_add_check
     | alter_table_convert_charset
 
@@ -400,31 +327,19 @@ alter_table_rename_table:
 
 alter_table_option:
     ALTER TABLE _table alter_checksum
-    | ALTER TABLE _table delay_key_write
     | ALTER TABLE _table disable_enable_keys
     | ALTER TABLE _table FORCE
-    | ALTER TABLE _table insert_method
     | ALTER TABLE _table row_format
     | ALTER TABLE _table stats_auto_recalc
     | ALTER TABLE _table stats_persistent
-    | ALTER TABLE _table pack_keys
 
 alter_checksum:
     CHECKSUM 0
     | CHECKSUM 1
 
-delay_key_write:
-    DELAY_KEY_WRITE 0
-    | DELAY_KEY_WRITE 1
-
 disable_enable_keys:
     DISABLE KEYS
     | ENABLE KEYS
-
-insert_method:
-    INSERT_METHOD NO
-    | INSERT_METHOD FIRST
-    | INSERT_METHOD LAST
 
 row_format:
     ROW_FORMAT DEFAULT
@@ -442,32 +357,6 @@ stats_persistent:
     STATS_PERSISTENT 0
     | STATS_PERSISTENT 1
     | STATS_PERSISTENT DEFAULT
-
-pack_keys:
-    PACK_KEYS 0
-    | PACK_KEYS 1
-    | PACK_KEYS DEFAULT
-
-alter_table_add_partition:
-    ALTER TABLE _table ADD PARTITION (PARTITION _new_table_name VALUES LESS THAN (_int32_unsigned))
-    | ALTER TABLE _table ADD PARTITION (PARTITION _new_table_name VALUES LESS THAN (MAXVALUE))
-    | ALTER TABLE _table ADD PARTITION (PARTITION _new_table_name VALUES IN ((_int8_unsigned)))
-
-alter_table_drop_partition:
-    ALTER TABLE _table DROP PARTITION _table
-
-alter_table_truncate_partition:
-    ALTER TABLE _table TRUNCATE PARTITION ALL
-    | ALTER TABLE _table TRUNCATE PARTITION _table
-
-alter_table_coalesce_partition:
-    ALTER TABLE _table COALESCE PARTITION { print(math.random(1, 3)) }
-
-alter_table_remove_partitioning:
-    ALTER TABLE _table REMOVE PARTITIONING
-
-alter_table_rebuild_partition:
-    ALTER TABLE _table REBUILD PARTITION ALL
 
 alter_table_add_check:
     ALTER TABLE _table ADD CHECK (( _column > 0 ))

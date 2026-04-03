@@ -57,7 +57,7 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
                 "--port", String.valueOf(port),                // 数据库端口号
 
                 // ============ 线程与执行控制 ============
-                "--num-threads", "5",                         // 1个数据库任务
+                "--num-threads", "80",                         // 1个数据库任务
                 "--timeout-seconds", "30",                    // 运行上限，防止测试卡死
 
                 // ============ 日志控制 ============
