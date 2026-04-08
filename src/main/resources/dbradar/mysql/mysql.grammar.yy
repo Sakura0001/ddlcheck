@@ -14,6 +14,9 @@ new_column_more:
     , new_column
 
 new_column:
+    column_definition
+
+column_definition:
     _new_column_name type_name column_constraint?
     | _new_column_name type_name generated_column_definition
 
@@ -55,7 +58,6 @@ type_name:
     | TIMESTAMP
     | TIME
     | YEAR
-    | JSON
     | BOOLEAN
     | BOOL
     | ENUM ('a', 'b')
@@ -145,10 +147,10 @@ column_constraint:
     | DEFAULT NULL
     | AUTO_INCREMENT
     @disable-query {AUTO_INCREMENT.*AUTO_INCREMENT}                 # Only one AUTO_INCREMENT column allowed
-    @disable-query {(TEXT|BLOB|JSON|DATE|TIME|DATETIME|TIMESTAMP|YEAR|ENUM|SET|BOOLEAN|BOOL).*AUTO_INCREMENT}
+    @disable-query {(TEXT|BLOB|DATE|TIME|DATETIME|TIMESTAMP|YEAR|ENUM|SET|BOOLEAN|BOOL).*AUTO_INCREMENT}
     | COMMENT 'test_comment'
     | CHECK (( _int8_unsigned > 0 ))
-    @disable-query {(BLOB|TEXT|JSON).*CHECK}
+    @disable-query {(BLOB|TEXT).*CHECK}
 
 table_option:
     AUTO_INCREMENT = _int32_unsigned
@@ -175,14 +177,6 @@ two_value_option:
 
 engine_option:
     InnoDB
-    | InnoDB
-    | InnoDB
-    | InnoDB
-    | InnoDB
-    | MyISAM
-    @disable-oracle transaction_verifier
-    | MEMORY
-    @disable-oracle transaction_verifier
 
 three_value_option:
     1
@@ -264,32 +258,32 @@ algorithm:
     | , ALGORITHM DEFAULT
 
 alter_table_add_column:
-    ALTER TABLE _table ADD COLUMN? _new_column_name type_name algorithm?
-    | ALTER TABLE _table ADD COLUMN? _new_column_name type_name FIRST algorithm?
-    | ALTER TABLE _table ADD COLUMN? _new_column_name type_name AFTER _column algorithm?
+    ALTER TABLE _table ADD COLUMN? column_definition algorithm?
+    | ALTER TABLE _table ADD COLUMN? column_definition FIRST algorithm?
+    | ALTER TABLE _table ADD COLUMN? column_definition AFTER _column algorithm?
 
 alter_table_drop_column:
     ALTER TABLE _table DROP COLUMN? _drop_column algorithm?
 
 alter_table_alter_column_set_default:
-    ALTER TABLE _table ALTER COLUMN? _column SET DEFAULT NULL
+    ALTER TABLE _table ALTER COLUMN? _mutable_column SET DEFAULT NULL
 
 alter_table_alter_column_drop_default:
-    ALTER TABLE _table ALTER COLUMN? _column DROP DEFAULT
+    ALTER TABLE _table ALTER COLUMN? _mutable_column DROP DEFAULT
 
 alter_table_alter_column_set_visible:
-    ALTER TABLE _table ALTER COLUMN? _column SET VISIBLE
+    ALTER TABLE _table ALTER COLUMN? _mutable_column SET VISIBLE
 
 alter_table_alter_column_set_invisible:
-    ALTER TABLE _table ALTER COLUMN? _column SET INVISIBLE
+    ALTER TABLE _table ALTER COLUMN? _mutable_column SET INVISIBLE
 
 alter_table_change_column:
-    ALTER TABLE _table CHANGE COLUMN? _column _new_column_name type_name algorithm?
-    | ALTER TABLE _table CHANGE COLUMN? _column _new_column_name type_name FIRST algorithm?
+    ALTER TABLE _table CHANGE COLUMN? _mutable_column _new_column_name type_name algorithm?
+    | ALTER TABLE _table CHANGE COLUMN? _mutable_column _new_column_name type_name FIRST algorithm?
 
 alter_table_modify_column:
-    ALTER TABLE _table MODIFY COLUMN? _column type_name algorithm?
-    | ALTER TABLE _table MODIFY COLUMN? _column type_name FIRST algorithm?
+    ALTER TABLE _table MODIFY COLUMN? _mutable_column type_name algorithm?
+    | ALTER TABLE _table MODIFY COLUMN? _mutable_column type_name FIRST algorithm?
 
 alter_table_rename_column:
     ALTER TABLE _table RENAME COLUMN _column TO _new_column_name
@@ -878,11 +872,11 @@ constant:
     | _char
     | _text
     | integerl
-    | CURRENT_TIME              @disable-symbol generated_constraint, create_index
+    | CURRENT_TIME              @disable-symbol generated_column_definition, create_index
                                 @disable-oracle equation
-    | CURRENT_DATE              @disable-symbol generated_constraint, create_index
+    | CURRENT_DATE              @disable-symbol generated_column_definition, create_index
                                 @disable-oracle equation
-    | CURRENT_TIMESTAMP         @disable-symbol generated_constraint, create_index
+    | CURRENT_TIMESTAMP         @disable-symbol generated_column_definition, create_index
                                 @disable-oracle equation
 integerl:
     _int8
@@ -898,7 +892,6 @@ function_call:
     | encrypt_func
     | information_func    @disable-oracle equation
     | misc_func
-    | json_func
     | aggregate_func
     @disable-symbol expr_without_aggregate, aggregate_func                     # Nested aggregate functions are not allowed
     @disable-oracle transaction_verifier
@@ -924,34 +917,6 @@ misc_func:
     | RAND()         @disable-oracle equation
     | RAND( arg )    @disable-oracle equation
     | UUID()         @disable-oracle equation
-
-json_func:
-    JSON_ARRAY( arg )
-    | JSON_ARRAY( arg, arg )
-    | JSON_OBJECT( arg, arg )
-    | JSON_OBJECT( arg, arg, arg, arg )
-    | JSON_EXTRACT( arg, '$.key' )
-    | JSON_CONTAINS( arg, arg )
-    | JSON_CONTAINS_PATH( arg, 'one', '$.key' )
-    | JSON_KEYS( arg )
-    | JSON_LENGTH( arg )
-    | JSON_TYPE( arg )
-    | JSON_VALID( arg )
-    | JSON_UNQUOTE( arg )
-    | JSON_DEPTH( arg )
-    | JSON_PRETTY( arg )
-    | JSON_QUOTE( arg )
-    | JSON_SET( arg, '$.key', arg )
-    | JSON_INSERT( arg, '$.key', arg )
-    | JSON_REPLACE( arg, '$.key', arg )
-    | JSON_REMOVE( arg, '$.key' )
-    | JSON_MERGE_PRESERVE( arg, arg )
-    | JSON_MERGE_PATCH( arg, arg )
-    | JSON_SEARCH( arg, 'one', arg )
-    | JSON_ARRAYAGG( _column )
-    @disable-symbol expr_without_aggregate
-    | JSON_OBJECTAGG( _column, _column )
-    @disable-symbol expr_without_aggregate
 
 window_func:
     ROW_NUMBER() OVER (window_partition_clause? window_order_clause)
@@ -1033,7 +998,6 @@ type:
     | UNSIGNED INTEGER
     | FLOAT
     | DOUBLE
-    | JSON
     | YEAR
 
 charset:

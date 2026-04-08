@@ -22,6 +22,7 @@ import com.beust.jcommander.JCommander.Builder;
 import dbradar.cockroachdb.CockroachDBProvider;
 import dbradar.mysql.MySQLOptions;
 import dbradar.mysql.MySQLProvider;
+import dbradar.mysql.oracle.MySQLStressOracle;
 import dbradar.postgresql.PostgreSQLProvider;
 import dbradar.sqlite3.SQLite3Provider;
 import dbradar.tidb.TiDBProvider;
@@ -56,6 +57,7 @@ public final class Main {
         nrSuccessfulActions.set(0);
         nrUnsuccessfulActions.set(0);
         threadsShutdown.set(0);
+        MySQLStressOracle.resetGlobalSuccessRateLogging();
         StateLogger.resetInitializedProviders();
 
         List<DatabaseProvider> providers = getDBMSProviders();

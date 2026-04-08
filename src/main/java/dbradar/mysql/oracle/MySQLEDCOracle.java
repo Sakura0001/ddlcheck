@@ -23,7 +23,6 @@ public class MySQLEDCOracle extends EDCBase<MySQLGlobalState> {
         super(state);
         synState = new MySQLGlobalState();
         EXPECTED_QUERY_ERRORS.add("Subquery returns more than 1 row");
-        EXPECTED_QUERY_ERRORS.add("Invalid data type for JSON data in argument 2 to function member of");
         UNEXPECTED_DDL_ERRORS.add("innodb");
     }
 

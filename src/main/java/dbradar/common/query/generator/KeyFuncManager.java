@@ -391,7 +391,7 @@ public class KeyFuncManager extends AbstractKeyFuncManager {
                 ASTNode pNode = parent;
                 while (pNode != null) {
                     String symbol = pNode.getToken().getValue();
-                    if (symbol.equals("generated_constraint")) { // generated_constraint is the symbol in grammar
+                    if (symbol.equals("generated_column_definition")) {
                         // The current column definition is not done
                         columns.remove(lastColumn);
                         break;

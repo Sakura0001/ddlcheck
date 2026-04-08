@@ -27,7 +27,7 @@ public class MySQLSchema extends AbstractSchema<MySQLGlobalState, MySQLSchema.My
     private List<MySQLForeignKey> foreignKeys;
 
     public enum MySQLDataType {
-        INT, TEXT, FLOAT, DOUBLE, DECIMAL, BIT, BLOB, CHAR, DATE, TIME, DATETIME, BOOLEAN, JSON;
+        INT, TEXT, FLOAT, DOUBLE, DECIMAL, BIT, BLOB, CHAR, DATE, TIME, DATETIME, BOOLEAN;
 
         public boolean isNumeric() {
             switch (this) {
@@ -44,7 +44,6 @@ public class MySQLSchema extends AbstractSchema<MySQLGlobalState, MySQLSchema.My
                 case TIME:
                 case DATETIME:
                 case BOOLEAN:
-                case JSON:
                     return false;
                 default:
                     throw new AssertionError(this);
@@ -206,10 +205,9 @@ public class MySQLSchema extends AbstractSchema<MySQLGlobalState, MySQLSchema.My
             case "bool":
             case "boolean":
                 return MySQLDataType.BOOLEAN;
-            case "json":
             case "enum":
             case "set":
-                return MySQLDataType.JSON;
+                return MySQLDataType.CHAR;
             case "year":
                 return MySQLDataType.INT;
             default:
@@ -278,8 +276,7 @@ public class MySQLSchema extends AbstractSchema<MySQLGlobalState, MySQLSchema.My
     public static class MySQLTable extends AbstractRelationalTable<MySQLColumn, MySQLIndex, MySQLGlobalState> {
 
         public enum MySQLEngine {
-            INNO_DB("InnoDB"), MY_ISAM("MyISAM"), MEMORY("MEMORY"), HEAP("HEAP"), CSV("CSV"), MERGE("MERGE"),
-            ARCHIVE("ARCHIVE"), FEDERATED("FEDERATED");
+            INNO_DB("InnoDB"), DSTORE("Dstore");
 
             private String s;
 
