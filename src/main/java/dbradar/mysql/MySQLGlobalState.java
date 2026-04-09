@@ -57,7 +57,7 @@ public class MySQLGlobalState extends SQLGlobalState {
      * Create a connection to an existing database, and do not delete it
      */
     public SQLConnection createConnection(String host, int port, String username, String password, String databaseName) throws SQLException {
-        String url = String.format("jdbc:mysql://%s:%d/%s", host, port, databaseName);
+        String url = buildDatabaseConnectionUrl(host, port, databaseName);
         JdbcDrivers.ensureDriverLoaded(url);
         Connection conn = DriverManager.getConnection(url, username, password);
         return new SQLConnection(conn);
@@ -87,8 +87,7 @@ public class MySQLGlobalState extends SQLGlobalState {
     }
 
     public SQLConnection createDatabase(String host, int port, String username, String password, String databaseName) throws SQLException {
-        String url = String.format("jdbc:mysql://%s:%d?serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true",
-                host, port);
+        String url = buildServerConnectionUrl(host, port);
         JdbcDrivers.ensureDriverLoaded(url);
         Connection conn = DriverManager.getConnection(url, username, password);
         try (Statement statement = conn.createStatement()) {
@@ -114,6 +113,17 @@ public class MySQLGlobalState extends SQLGlobalState {
 
     public MySQLOptions getDbmsSpecificOptions() {
         return (MySQLOptions) super.getDbmsSpecificOptions();
+    }
+
+    static String buildDatabaseConnectionUrl(String host, int port, String databaseName) {
+        return String.format(
+                "jdbc:mysql://%s:%d/%s?serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true",
+                host, port, databaseName);
+    }
+
+    static String buildServerConnectionUrl(String host, int port) {
+        return String.format("jdbc:mysql://%s:%d?serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true",
+                host, port);
     }
 
 }
