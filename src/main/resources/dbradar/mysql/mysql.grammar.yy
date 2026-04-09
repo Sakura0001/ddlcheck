@@ -188,7 +188,7 @@ two_value_option:
     | 1
 
 engine_option:
-    InnoDB
+    Dstore
 
 three_value_option:
     1
