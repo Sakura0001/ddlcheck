@@ -61,7 +61,7 @@ public class TestMySQLStressDML {
         String setValue = MySQLStressValueHelper.generateStressSafeValue(
                 new MySQLColumn("c2", null, false, "set", 0L, 0, 0, ""),
                 state);
-        assertTrue(Set.of("'a'", "'b'").contains(setValue),
+        assertTrue(Set.of("'a'", "'b'", "'a,b'").contains(setValue),
                 "stress-safe set literal should stay within SET('a','b'), but was: " + setValue);
     }
 
