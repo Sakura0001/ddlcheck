@@ -10,6 +10,7 @@ import dbradar.mysql.MySQLGlobalState;
 import dbradar.mysql.MySQLOptions;
 import dbradar.mysql.MySQLProvider.MySQLDDLStmt;
 import dbradar.mysql.MySQLProvider.MySQLQueryProvider;
+import dbradar.mysql.MySQLTablespaceGate;
 import dbradar.mysql.schema.MySQLSchema.MySQLColumn;
 import dbradar.mysql.schema.MySQLSchema.MySQLTable;
 
@@ -186,11 +187,36 @@ public class MySQLStressOracle implements TestOracle {
                 continue;
             }
             boolean refreshSchemaOnFailure = kind == StatementKind.DML && isInsertLike(query.getQueryString());
-            executeWithRetries(state, query.getQueryString(), kind, query.couldAffectSchema(), refreshSchemaOnFailure);
+            String sql = query.getQueryString();
+            MySQLTablespaceGate.GateLease lease = MySQLTablespaceGate.tryAcquire(sql);
+            if (!lease.isAcquired()) {
+                if (kind == StatementKind.DDL) {
+                    SQLQueryAdapter fallback = generateQuery(state, kind, false);
+                    if (fallback == null) {
+                        continue;
+                    }
+                    sql = fallback.getQueryString();
+                    refreshSchemaOnFailure = kind == StatementKind.DML && isInsertLike(sql);
+                    lease = MySQLTablespaceGate.tryAcquire(sql);
+                    if (!lease.isAcquired()) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+            try (MySQLTablespaceGate.GateLease ignored = lease) {
+                executeWithRetries(state, sql, kind, query.couldAffectSchema(), refreshSchemaOnFailure);
+            }
         }
     }
 
     private SQLQueryAdapter generateQuery(MySQLGlobalState state, StatementKind kind) throws Exception {
+        return generateQuery(state, kind, true);
+    }
+
+    private SQLQueryAdapter generateQuery(MySQLGlobalState state, StatementKind kind, boolean allowTablespace)
+            throws Exception {
         if ((kind == StatementKind.DML || kind == StatementKind.QUERY)
                 && state.getSchema().getDatabaseTables().isEmpty()) {
             return null;
@@ -202,7 +228,7 @@ public class MySQLStressOracle implements TestOracle {
                         if (state.getSchema().getDatabaseTables().isEmpty()) {
                             return MySQLDDLStmt.CREATE_TABLE.getQueryProvider().getQuery(state);
                         }
-                        return Randomly.fromOptions(MySQLDDLStmt.values()).getQueryProvider().getQuery(state);
+                        return MySQLDDLStmt.getRandomDDL(allowTablespace).getQuery(state);
                     case DML:
                         return generateStressDML(state);
                     case QUERY:

@@ -15,6 +15,7 @@ import dbradar.common.schema.AbstractTable;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +36,7 @@ public class MySQLProvider extends SQLProviderAdapter {
         CHECK_TABLE("check_table", false),
         TRUNCATE_TABLE("truncate_table", true),
         ALTER_TABLE("alter_table", true),
+        ALTER_TABLESPACE("alter_tablespace", true),
         ALTER_TABLE_ADD_COLUMN("alter_table_add_column", true),
         ALTER_TABLE_DROP_COLUMN("alter_table_drop_column", true),
         ALTER_TABLE_ALTER_COLUMN_SET_DEFAULT("alter_table_alter_column_set_default", true),
@@ -109,6 +111,7 @@ public class MySQLProvider extends SQLProviderAdapter {
         queryWeights.put(MySQLQueryProvider.CHECK_TABLE, 5);
         queryWeights.put(MySQLQueryProvider.TRUNCATE_TABLE, 2);
         queryWeights.put(MySQLQueryProvider.ALTER_TABLE, 5);
+        queryWeights.put(MySQLQueryProvider.ALTER_TABLESPACE, 1);
         queryWeights.put(MySQLQueryProvider.ALTER_VIEW, 5);
         queryWeights.put(MySQLQueryProvider.RENAME_TABLE, 5);
         queryWeights.put(MySQLQueryProvider.DROP_INDEX, 5);
@@ -136,6 +139,7 @@ public class MySQLProvider extends SQLProviderAdapter {
         CREATE_TABLE(MySQLQueryProvider.CREATE_TABLE),
         CREATE_INDEX(MySQLQueryProvider.CREATE_INDEX),
         CREATE_VIEW(MySQLQueryProvider.CREATE_VIEW),
+        ALTER_TABLESPACE(MySQLQueryProvider.ALTER_TABLESPACE),
         ALTER_TABLE_ADD_COLUMN(MySQLQueryProvider.ALTER_TABLE_ADD_COLUMN),
         ALTER_TABLE_DROP_COLUMN(MySQLQueryProvider.ALTER_TABLE_DROP_COLUMN),
         ALTER_TABLE_ALTER_COLUMN_SET_DEFAULT(MySQLQueryProvider.ALTER_TABLE_ALTER_COLUMN_SET_DEFAULT),
@@ -171,8 +175,22 @@ public class MySQLProvider extends SQLProviderAdapter {
             return queryProvider;
         }
 
+        public boolean isTablespaceSensitive() {
+            return this == ALTER_TABLESPACE;
+        }
+
         public static MySQLQueryProvider getRandomDDL() {
             return Randomly.fromOptions(MySQLDDLStmt.values()).getQueryProvider();
+        }
+
+        public static MySQLQueryProvider getRandomDDL(boolean allowTablespace) {
+            if (allowTablespace) {
+                return getRandomDDL();
+            }
+            List<MySQLDDLStmt> ddlStmts = Arrays.stream(MySQLDDLStmt.values())
+                    .filter(stmt -> !stmt.isTablespaceSensitive())
+                    .collect(Collectors.toList());
+            return Randomly.fromList(ddlStmts).getQueryProvider();
         }
 
     }

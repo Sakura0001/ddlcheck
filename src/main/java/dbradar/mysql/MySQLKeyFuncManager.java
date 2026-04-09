@@ -17,6 +17,9 @@ import dbradar.mysql.schema.MySQLSchema;
 import dbradar.mysql.schema.MySQLSchema.MySQLIndex;
 import dbradar.mysql.oracle.MySQLStressValueHelper;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -35,6 +38,8 @@ public class MySQLKeyFuncManager extends KeyFuncManager {
         keyFuncMap.put(InsertSelectSameTableKeyFunc.KEY, new InsertSelectSameTableKeyFunc());
         keyFuncMap.put(ExistingColumnAliasKeyFunc.KEY, new ExistingColumnAliasKeyFunc());
         keyFuncMap.put(InsertDuplicateUpdateColumnKeyFunc.KEY, new InsertDuplicateUpdateColumnKeyFunc());
+        keyFuncMap.put(ExistTablespaceKeyFunc.KEY, new ExistTablespaceKeyFunc());
+        keyFuncMap.put(TablespaceNameKeyFunc.KEY, new TablespaceNameKeyFunc());
         keyFuncMap.put("_insert_values", new StressInsertValueKeyFunc());
         keyFuncMap.put("_value", new StressAssignValueKeyFunc());
     }
@@ -239,6 +244,56 @@ public class MySQLKeyFuncManager extends KeyFuncManager {
                     parent.addChild(columnNode);
                 }
             }
+        }
+    }
+
+    /**
+     * This key function is used to fetch an existing tablespace.
+     * For example, ALTER TABLE _table TABLESPACE _exist_tablespace
+     */
+    private class ExistTablespaceKeyFunc implements KeyFunc {
+        public static final String KEY = "_exist_tablespace";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            List<String> tablespaces = new ArrayList<>();
+            String sql = "SELECT name FROM INFORMATION_SCHEMA.DSTORE_TABLESPACES "
+                    + "WHERE name LIKE 'ts\\_%' ESCAPE '\\\\'";
+
+            try (MySQLTablespaceGate.GateLease lease = MySQLTablespaceGate.tryAcquire(sql)) {
+                if (!lease.isAcquired()) {
+                    throw new QueryGenerationException("Tablespace gate is saturated for _exist_tablespace");
+                }
+                try (Statement stmt = ((MySQLGlobalState) globalState).getConnection().createStatement()) {
+                    ResultSet rs = stmt.executeQuery(sql);
+                    while (rs.next()) {
+                        tablespaces.add(rs.getString("name"));
+                    }
+                    rs.close();
+                }
+            } catch (SQLException e) {
+                throw new QueryGenerationException("Failed to fetch tablespaces: " + e.getMessage());
+            }
+
+            if (tablespaces.isEmpty()) {
+                throw new QueryGenerationException("No existing tablespace found for _exist_tablespace");
+            }
+
+            String tablespace = Randomly.fromList(tablespaces);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, tablespace)));
+        }
+    }
+
+    /**
+     * This key function is used to generate a new dstore-style tablespace name.
+     */
+    private class TablespaceNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_tablespace_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            String tablespaceName = "ts_" + Math.abs(System.nanoTime());
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, tablespaceName)));
         }
     }
 

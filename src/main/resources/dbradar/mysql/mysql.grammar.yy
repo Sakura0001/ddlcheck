@@ -28,16 +28,28 @@ generated_expr:
     _int8_unsigned + _int8_unsigned
     | _int8_unsigned * _int8_unsigned
     | _int8_unsigned - _int8_unsigned
+    | _column + _int8_unsigned
+    | _column * _int8_unsigned
+    | _column - _int8_unsigned
+    | _column + _column
     | ABS( _int8_unsigned )
+    | ABS( _column )
     | CONCAT( 'prefix_', _int8_unsigned )
-    | UPPER( _char )
-    | LOWER( _char )
-    | LENGTH( _char )
+    | CONCAT( _column, '_suffix' )
+    | UPPER( _column )
+    | LOWER( _column )
+    | LENGTH( _column )
     | IFNULL( _int8_unsigned, 0 )
+    | IFNULL( _column, 0 )
     | COALESCE( _int8_unsigned, _int8_unsigned )
+    | COALESCE( _column, 0 )
+    | COALESCE( _column, _column )
     | IF( _int8_unsigned > 0, 1, 0 )
+    | IF( _column > 0, 1, 0 )
     | MOD( _int8_unsigned, { print(math.random(2, 10)) } )
+    | MOD( _column, { print(math.random(2, 10)) } )
     | FLOOR( _int8_unsigned / { print(math.random(1, 10)) } )
+    | FLOOR( _column / { print(math.random(1, 10)) } )
 
 generated_storage:
     VIRTUAL
@@ -233,7 +245,9 @@ drop_table_option:
 # ALTER TABLE
 alter_table:
     alter_table_add_column
+    | alter_table_multi_add_column
     | alter_table_drop_column
+    | alter_table_multi_drop_column
     | alter_table_alter_column_set_default
     | alter_table_alter_column_drop_default
     | alter_table_alter_column_set_visible
@@ -243,6 +257,7 @@ alter_table:
     | alter_table_rename_column
     | alter_table_add_index
     | alter_table_drop_index
+    | alter_table_alter_index_visibility
     | alter_table_rename_index
     | alter_table_add_primary_key
     | alter_table_drop_primary_key
@@ -252,24 +267,75 @@ alter_table:
     | alter_table_option
     | alter_table_add_check
     | alter_table_convert_charset
+    | alter_table_combined_index
+    | SELECT all_columns FROM system_information
+
+alter_tablespace:
+    ALTER TABLESPACE _exist_tablespace RENAME TO _tablespace_name
+    | ALTER TABLE _table TABLESPACE _exist_tablespace
+    | DROP TABLESPACE _exist_tablespace
+    | CREATE TABLESPACE _tablespace_name
 
 algorithm:
-    , ALGORITHM COPY
-    | , ALGORITHM DEFAULT
+    , ALGORITHM = INPLACE
+    | , ALGORITHM = INSTANT
+    | , ALGORITHM = COPY
+    | , ALGORITHM = DEFAULT
+
+lock_clause:
+    , LOCK = lock_value
+
+lock_value:
+    DEFAULT
+    | SHARED
+    | EXCLUSIVE
+
+row_format_clause:
+    , ROW_FORMAT = row_format_value
+
+row_format_value:
+    DEFAULT
+    | DYNAMIC
+
+all_columns:
+    {print("*")}
+
+system_information:
+    INFORMATION_SCHEMA.DSTORE_BUFFER_POOL_STATS LIMIT 250
+    | INFORMATION_SCHEMA.DSTORE_INDEXES LIMIT 250
+    | INFORMATION_SCHEMA.DSTORE_LOCKS LIMIT 250
+    | INFORMATION_SCHEMA.DSTORE_MEM LIMIT 250
+    | INFORMATION_SCHEMA.DSTORE_TRX LIMIT 250
+    | INFORMATION_SCHEMA.DSTORE_UNDO LIMIT 250
+    | INFORMATION_SCHEMA.ENABLED_ROLES LIMIT 250
+    | INFORMATION_SCHEMA.ENGINES LIMIT 250
+    | INFORMATION_SCHEMA.EVENTS LIMIT 250
+    | INFORMATION_SCHEMA.FILES LIMIT 250
+    | INFORMATION_SCHEMA.TABLE_CONSTRAINTS LIMIT 250
+    | INFORMATION_SCHEMA.TABLE_CONSTRAINTS_EXTENSIONS LIMIT 250
+    | INFORMATION_SCHEMA.TABLESPACES LIMIT 250
+    | INFORMATION_SCHEMA.DSTORE_SEGMENT LIMIT 250
 
 alter_table_add_column:
-    ALTER TABLE _table ADD COLUMN? column_definition algorithm?
-    | ALTER TABLE _table ADD COLUMN? column_definition FIRST algorithm?
-    | ALTER TABLE _table ADD COLUMN? column_definition AFTER _column algorithm?
+    ALTER TABLE _table ADD COLUMN? column_definition algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ADD COLUMN? column_definition FIRST algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ADD COLUMN? column_definition AFTER _column algorithm? lock_clause? row_format_clause?
+
+alter_table_multi_add_column:
+    ALTER TABLE _table ADD COLUMN column_definition , ADD COLUMN column_definition algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ADD COLUMN column_definition , ADD COLUMN column_definition , ADD COLUMN column_definition algorithm? lock_clause? row_format_clause?
 
 alter_table_drop_column:
-    ALTER TABLE _table DROP COLUMN? _drop_column algorithm?
+    ALTER TABLE _table DROP COLUMN? _drop_column algorithm? lock_clause? row_format_clause?
+
+alter_table_multi_drop_column:
+    ALTER TABLE _table DROP COLUMN _drop_column , DROP COLUMN _drop_column algorithm? lock_clause? row_format_clause?
 
 alter_table_alter_column_set_default:
-    ALTER TABLE _table ALTER COLUMN? _mutable_column SET DEFAULT NULL
+    ALTER TABLE _table ALTER COLUMN? _mutable_column SET DEFAULT NULL algorithm? lock_clause?
 
 alter_table_alter_column_drop_default:
-    ALTER TABLE _table ALTER COLUMN? _mutable_column DROP DEFAULT
+    ALTER TABLE _table ALTER COLUMN? _mutable_column DROP DEFAULT algorithm? lock_clause?
 
 alter_table_alter_column_set_visible:
     ALTER TABLE _table ALTER COLUMN? _mutable_column SET VISIBLE
@@ -278,25 +344,32 @@ alter_table_alter_column_set_invisible:
     ALTER TABLE _table ALTER COLUMN? _mutable_column SET INVISIBLE
 
 alter_table_change_column:
-    ALTER TABLE _table CHANGE COLUMN? _mutable_column _new_column_name type_name algorithm?
-    | ALTER TABLE _table CHANGE COLUMN? _mutable_column _new_column_name type_name FIRST algorithm?
+    ALTER TABLE _table CHANGE COLUMN? _mutable_column _new_column_name type_name algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table CHANGE COLUMN? _mutable_column _new_column_name type_name FIRST algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table CHANGE COLUMN? _mutable_column _new_column_name type_name AFTER _column algorithm? lock_clause? row_format_clause?
 
 alter_table_modify_column:
-    ALTER TABLE _table MODIFY COLUMN? _mutable_column type_name algorithm?
-    | ALTER TABLE _table MODIFY COLUMN? _mutable_column type_name FIRST algorithm?
+    ALTER TABLE _table MODIFY COLUMN? _mutable_column type_name algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table MODIFY COLUMN? _mutable_column type_name FIRST algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table MODIFY COLUMN? _mutable_column type_name AFTER _column algorithm? lock_clause? row_format_clause?
 
 alter_table_rename_column:
-    ALTER TABLE _table RENAME COLUMN _column TO _new_column_name
+    ALTER TABLE _table RENAME COLUMN _column TO _new_column_name algorithm? lock_clause? row_format_clause?
 
 alter_table_add_index:
-    ALTER TABLE _table ADD INDEX _new_index_name index_type? (index_table_column) index_option?
-    | ALTER TABLE _table ADD KEY _new_index_name index_type? (index_table_column) index_option?
-    | ALTER TABLE _table ADD INDEX _new_index_name ((function_index_expr)) index_option?
-    | ALTER TABLE _table ADD KEY _new_index_name ((function_index_expr)) index_option?
+    ALTER TABLE _table ADD INDEX _new_index_name index_type? (index_table_column) index_option? algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ADD KEY _new_index_name index_type? (index_table_column) index_option? algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ADD INDEX _new_index_name ((function_index_expr)) index_option? algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ADD KEY _new_index_name ((function_index_expr)) index_option? algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ADD INDEX _new_index_name (index_table_column, (function_index_expr)) index_option? algorithm? lock_clause? row_format_clause?
 
 alter_table_drop_index:
-    ALTER TABLE _table DROP INDEX _index
-    | ALTER TABLE _table DROP KEY _index
+    ALTER TABLE _table DROP INDEX _index lock_clause? row_format_clause?
+    | ALTER TABLE _table DROP KEY _index lock_clause? row_format_clause?
+
+alter_table_alter_index_visibility:
+    ALTER TABLE _table ALTER INDEX _index VISIBLE algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ALTER INDEX _index INVISIBLE algorithm? lock_clause? row_format_clause?
 
 alter_table_rename_index:
     ALTER TABLE _table RENAME INDEX _index TO _new_index_name
@@ -309,9 +382,13 @@ alter_table_drop_primary_key:
     ALTER TABLE _table DROP PRIMARY KEY
 
 alter_table_add_unique_key:
-    ALTER TABLE _table ADD UNIQUE (_distinct_key_column more_distinct_key_column?)
-    | ALTER TABLE _table ADD UNIQUE INDEX (_distinct_key_column more_distinct_key_column?)
-    | ALTER TABLE _table ADD UNIQUE KEY (_distinct_key_column more_distinct_key_column?)
+    ALTER TABLE _table ADD UNIQUE (_distinct_key_column more_distinct_key_column?) algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ADD UNIQUE INDEX (_distinct_key_column more_distinct_key_column?) algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table ADD UNIQUE KEY (_distinct_key_column more_distinct_key_column?) algorithm? lock_clause? row_format_clause?
+
+alter_table_combined_index:
+    ALTER TABLE _table DROP INDEX _index , ADD INDEX _new_index_name index_type? (index_table_column) index_option? algorithm? lock_clause? row_format_clause?
+    | ALTER TABLE _table DROP KEY _index , ADD KEY _new_index_name index_type? (index_table_column) index_option? algorithm? lock_clause? row_format_clause?
 
 alter_table_add_foreign_key:
     ALTER TABLE _table ADD FOREIGN KEY (_fk_column) foreign_key_clause
@@ -422,14 +499,25 @@ single_select:
 
 select_spec:
     all_or_distinct_or_distinct_row
+    | HIGH_PRIORITY
     | STRAIGHT_JOIN
     | SQL_SMALL_RESULT
     | SQL_BIG_RESULT
+    | SQL_BUFFER_RESULT
+    | SQL_CALC_FOUND_ROWS
 
 all_or_distinct_or_distinct_row:
     ALL
     | DISTINCT
     | DISTINCTROW
+
+for_lock_clause:
+    FOR UPDATE lock_wait_option?
+    | FOR SHARE lock_wait_option?
+
+lock_wait_option:
+    NOWAIT
+    | SKIP LOCKED
 
 # Aliases assignment:
 # JOIN ON: (1, x, 3), (x, 2, x) on_clause
@@ -441,6 +529,7 @@ join_clause:
     | join_table NATURAL JOIN join_table
     | join_table join_type join_table
     | join_table LEFT JOIN join_table on_or_use_clause      @disable-oracle transaction_verifier, equation
+    | join_table RIGHT JOIN join_table on_or_use_clause
 
 join_type:
     JOIN
@@ -458,10 +547,10 @@ join_table:
     | table_source
 
 simple_select:
-    SELECT select_spec? field_list FROM table_source where_clause? group_by_option? order_by_option? limit_option?
-    | SELECT field_list FROM table_source where_clause?
-    | SELECT field_list FROM table_source where_clause?
-    | SELECT field_list FROM table_source
+    SELECT select_spec? field_list FROM table_source where_clause? group_by_option? order_by_option? limit_option? for_lock_clause?
+    | SELECT field_list FROM table_source where_clause? for_lock_clause?
+    | SELECT field_list FROM table_source where_clause? for_lock_clause?
+    | SELECT field_list FROM table_source for_lock_clause?
     | SELECT field_list FROM table_source
     @disable-oracle transaction_verifier
     | SELECT field_list FROM table_source
@@ -546,7 +635,9 @@ simple_cte_query:
 
 # UPDATE
 update:
-    UPDATE LOW_PRIORITY? IGNORE? _table SET assignment assignment_more* where_clause?
+    UPDATE LOW_PRIORITY? IGNORE? _table SET assignment assignment_more* where_clause? dml_order_by_option dml_limit_option?
+    | UPDATE LOW_PRIORITY? IGNORE? _table SET assignment assignment_more* where_clause? dml_order_by_option
+    | UPDATE LOW_PRIORITY? IGNORE? _table SET assignment assignment_more* where_clause?
     | UPDATE LOW_PRIORITY? IGNORE? _table SET assignment assignment_more* where_clause
     @enable-oracle transaction_verifier
     | UPDATE LOW_PRIORITY? IGNORE? _table SET assignment assignment_more* where_clause
@@ -559,9 +650,17 @@ assignment:
 assignment_more:
    , assignment
 
+dml_order_by_option:
+   ORDER BY _insert_columns
+
+dml_limit_option:
+   LIMIT _int4_unsigned
+
 # DELETE
 delete:
-    DELETE LOW_PRIORITY? QUICK? IGNORE? FROM _table where_clause?
+    DELETE LOW_PRIORITY? QUICK? IGNORE? FROM _table where_clause? dml_order_by_option dml_limit_option?
+    | DELETE LOW_PRIORITY? QUICK? IGNORE? FROM _table where_clause? dml_order_by_option
+    | DELETE LOW_PRIORITY? QUICK? IGNORE? FROM _table where_clause?
     | DELETE LOW_PRIORITY? QUICK? IGNORE? FROM _table where_clause
     @enable-oracle transaction_verifier
     | DELETE LOW_PRIORITY? QUICK? IGNORE? FROM _table where_clause
@@ -653,6 +752,30 @@ function_index_expr:
     | CONCAT(_column, '_suffix')
     | LENGTH(_column)
     | MOD(_column, { print(math.random(2, 10)) })
+    | LEFT(_column, { print(math.random(1, 50)) })
+    | RIGHT(_column, { print(math.random(1, 50)) })
+    | SUBSTRING(_column, _digit, { print(math.random(1, 50)) })
+    | SUBSTR(_column, _digit, { print(math.random(1, 50)) })
+    | TRIM(_column)
+    | LTRIM(_column)
+    | RTRIM(_column)
+    | REVERSE(_column)
+    | CHAR_LENGTH(_column)
+    | YEAR(_column)
+    | MONTH(_column)
+    | DAY(_column)
+    | DAYOFMONTH(_column)
+    | DAYOFWEEK(_column)
+    | DAYOFYEAR(_column)
+    | WEEKDAY(_column)
+    | WEEK(_column)
+    | HOUR(_column)
+    | MINUTE(_column)
+    | SECOND(_column)
+    | DATE(_column)
+    | TIME(_column)
+    | DATE_FORMAT(_column, '%Y-%m-%d')
+    | TO_DAYS(_column)
 
 index_type:
     USING BTREE
@@ -665,6 +788,7 @@ index_table_column:
 
 indexed_column:
     _distinct_key_column primary_key_order?
+    | (function_index_expr) primary_key_order?
 
 primary_key_order:
     ASC        @disable-query {USING HASH}
