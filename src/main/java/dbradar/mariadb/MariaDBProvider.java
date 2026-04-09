@@ -3,6 +3,7 @@ package dbradar.mariadb;
 import com.google.auto.service.AutoService;
 import dbradar.DatabaseProvider;
 import dbradar.GlobalState;
+import dbradar.JdbcDrivers;
 import dbradar.MainOptions;
 import dbradar.QueryProvider;
 import dbradar.Randomly;
@@ -232,6 +233,7 @@ public class MariaDBProvider extends SQLProviderAdapter {
         public SQLConnection createDatabase(String host, int port, String username, String password, String databaseName) throws SQLException {
             String url = String.format("jdbc:mariadb://%s:%d",
                     host, port);
+            JdbcDrivers.ensureDriverLoaded(url);
             Connection conn = DriverManager.getConnection(url, username, password);
             try (Statement statement = conn.createStatement()) {
                 statement.execute("DROP DATABASE IF EXISTS " + databaseName);
@@ -273,6 +275,7 @@ public class MariaDBProvider extends SQLProviderAdapter {
          */
         public SQLConnection createConnection(String host, int port, String username, String password, String databaseName) throws SQLException {
             String url = String.format("jdbc:mariadb://%s:%d/%s", host, port, databaseName);
+            JdbcDrivers.ensureDriverLoaded(url);
             Connection conn = DriverManager.getConnection(url, username, password);
             return new SQLConnection(conn);
         }

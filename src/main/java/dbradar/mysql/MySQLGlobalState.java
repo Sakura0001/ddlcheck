@@ -7,6 +7,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.HashMap;
 
+import dbradar.JdbcDrivers;
 import dbradar.MainOptions;
 import dbradar.mysql.schema.MySQLSchema;
 import dbradar.SQLConnection;
@@ -57,6 +58,7 @@ public class MySQLGlobalState extends SQLGlobalState {
      */
     public SQLConnection createConnection(String host, int port, String username, String password, String databaseName) throws SQLException {
         String url = String.format("jdbc:mysql://%s:%d/%s", host, port, databaseName);
+        JdbcDrivers.ensureDriverLoaded(url);
         Connection conn = DriverManager.getConnection(url, username, password);
         return new SQLConnection(conn);
     }
@@ -87,6 +89,7 @@ public class MySQLGlobalState extends SQLGlobalState {
     public SQLConnection createDatabase(String host, int port, String username, String password, String databaseName) throws SQLException {
         String url = String.format("jdbc:mysql://%s:%d?serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true",
                 host, port);
+        JdbcDrivers.ensureDriverLoaded(url);
         Connection conn = DriverManager.getConnection(url, username, password);
         try (Statement statement = conn.createStatement()) {
             statement.execute("DROP DATABASE IF EXISTS " + databaseName);

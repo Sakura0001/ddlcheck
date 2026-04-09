@@ -1,5 +1,6 @@
 package dbradar.tidb;
 
+import dbradar.JdbcDrivers;
 import dbradar.MainOptions;
 import dbradar.SQLConnection;
 import dbradar.SQLGlobalState;
@@ -46,6 +47,7 @@ public class TiDBGlobalState extends SQLGlobalState {
         String databaseName = getDatabaseName();
         String url = String.format("jdbc:mysql://%s:%d/%s",
                 host, port, databaseName);
+        JdbcDrivers.ensureDriverLoaded(url);
         Connection con = DriverManager.getConnection(url, username, password);
         return new SQLConnection(con);
     }
@@ -89,6 +91,7 @@ public class TiDBGlobalState extends SQLGlobalState {
     public SQLConnection createDatabase(String host, int port, String username, String password, String databaseName) throws SQLException {
         String url = String.format("jdbc:mysql://%s:%d?serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true",
                 host, port);
+        JdbcDrivers.ensureDriverLoaded(url);
         Connection conn = DriverManager.getConnection(url, username, password);
         try (Statement statement = conn.createStatement()) {
             statement.execute("DROP DATABASE IF EXISTS " + databaseName);

@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 import dbradar.DatabaseConnection;
+import dbradar.JdbcDrivers;
 import dbradar.MainOptions;
 import dbradar.Randomly;
 import dbradar.SQLConnection;
@@ -64,6 +65,7 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
      */
     public SQLConnection createConnection(String host, int port, String username, String password, String databaseName) throws SQLException {
         String url = String.format("jdbc:postgresql://%s:%d/%s", host, port, databaseName);
+        JdbcDrivers.ensureDriverLoaded(url);
         Connection conn = DriverManager.getConnection(url, username, password);
         return new SQLConnection(conn);
     }
@@ -234,12 +236,14 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
 
     public SQLConnection createDatabase(String host, int port, String username, String password, String databaseName, String createDatabaseCommand) throws SQLException {
         String url = String.format("jdbc:postgresql://%s:%d/postgres", host, port);
+        JdbcDrivers.ensureDriverLoaded(url);
         try (Connection conn = DriverManager.getConnection(url, username, password); Statement statement = conn.createStatement()) {
             statement.execute("DROP DATABASE IF EXISTS " + databaseName);
             statement.execute(createDatabaseCommand);
         }
 
         url = String.format("jdbc:postgresql://%s:%d/%s", host, port, databaseName);
+        JdbcDrivers.ensureDriverLoaded(url);
         Connection conn = DriverManager.getConnection(url, username, password);
 
         return new SQLConnection(conn);

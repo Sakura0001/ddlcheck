@@ -4,6 +4,7 @@ import com.google.auto.service.AutoService;
 import dbradar.DatabaseProvider;
 import dbradar.GlobalState;
 import dbradar.IgnoreMeException;
+import dbradar.JdbcDrivers;
 import dbradar.MainOptions;
 import dbradar.QueryManager;
 import dbradar.QueryProvider;
@@ -253,12 +254,14 @@ public class CockroachDBProvider extends SQLProviderAdapter {
 
         public SQLConnection createDatabase(String host, int port, String username, String password, String databaseName) throws SQLException {
             String url = String.format("jdbc:postgresql://%s:%d/postgres", host, port);
+            JdbcDrivers.ensureDriverLoaded(url);
             try (Connection conn = DriverManager.getConnection(url, username, password); Statement statement = conn.createStatement()) {
                 statement.execute("DROP DATABASE IF EXISTS " + databaseName);
                 statement.execute("CREATE DATABASE " + databaseName);
             }
 
             url = String.format("jdbc:postgresql://%s:%d/%s", host, port, databaseName);
+            JdbcDrivers.ensureDriverLoaded(url);
             Connection conn = DriverManager.getConnection(url, username, password);
 
             return new SQLConnection(conn);
@@ -287,6 +290,7 @@ public class CockroachDBProvider extends SQLProviderAdapter {
          */
         public SQLConnection createConnection(String host, int port, String username, String password, String databaseName) throws SQLException {
             String url = String.format("jdbc:postgresql://%s:%d/%s", host, port, databaseName);
+            JdbcDrivers.ensureDriverLoaded(url);
             Connection conn = DriverManager.getConnection(url, username, password);
             return new SQLConnection(conn);
         }

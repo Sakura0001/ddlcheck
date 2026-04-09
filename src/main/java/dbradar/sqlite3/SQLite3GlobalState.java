@@ -1,5 +1,6 @@
 package dbradar.sqlite3;
 
+import dbradar.JdbcDrivers;
 import dbradar.SQLConnection;
 import dbradar.SQLGlobalState;
 import dbradar.sqlite3.schema.SQLite3Schema;
@@ -46,6 +47,7 @@ public class SQLite3GlobalState extends SQLGlobalState {
         }
         File dataBase = new File(dir, databaseName + ".db");
         String url = "jdbc:sqlite:" + dataBase.getAbsolutePath();
+        JdbcDrivers.ensureDriverLoaded(url);
         return new SQLConnection(DriverManager.getConnection(url));
     }
 
@@ -64,6 +66,7 @@ public class SQLite3GlobalState extends SQLGlobalState {
             dataBase.delete();
         }
         String url = "jdbc:sqlite:" + dataBase.getAbsolutePath();
+        JdbcDrivers.ensureDriverLoaded(url);
         return new SQLConnection(DriverManager.getConnection(url));
     }
 
@@ -97,6 +100,7 @@ public class SQLite3GlobalState extends SQLGlobalState {
         }
         try {
             String url = "jdbc:sqlite:" + dataBase.getAbsolutePath();
+            JdbcDrivers.ensureDriverLoaded(url);
             return new SQLConnection(DriverManager.getConnection(url));
         } catch (SQLException e) {
             throw new RuntimeException(e);
