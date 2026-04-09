@@ -10,17 +10,15 @@ import dbradar.common.query.generator.ColumnReferenceFiller;
 import dbradar.common.query.generator.KeyFunc;
 import dbradar.common.query.generator.KeyFuncManager;
 import dbradar.common.query.generator.QueryGenerationException;
-import dbradar.common.query.generator.data.Generator;
-import dbradar.common.query.generator.data.GeneratorRegister;
 import dbradar.common.query.generator.data.IntGenerator;
 import dbradar.common.schema.AbstractTable;
 import dbradar.common.schema.AbstractTableColumn;
 import dbradar.mysql.schema.MySQLSchema;
 import dbradar.mysql.schema.MySQLSchema.MySQLIndex;
+import dbradar.mysql.oracle.MySQLStressValueHelper;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.stream.Collectors;
 
 public class MySQLKeyFuncManager extends KeyFuncManager {
@@ -33,6 +31,7 @@ public class MySQLKeyFuncManager extends KeyFuncManager {
         keyFuncMap.put(IndexKeyFunc.KEY, new IndexKeyFunc());
         keyFuncMap.put(DistinctKeyKeyFunc.KEY, new DistinctKeyKeyFunc());
         keyFuncMap.put(ForeignKeyColumnKeyFunc.KEY, new ForeignKeyColumnKeyFunc());
+        keyFuncMap.put(MutableColumnKeyFunc.KEY, new MutableColumnKeyFunc());
         keyFuncMap.put(InsertSelectSameTableKeyFunc.KEY, new InsertSelectSameTableKeyFunc());
         keyFuncMap.put(ExistingColumnAliasKeyFunc.KEY, new ExistingColumnAliasKeyFunc());
         keyFuncMap.put(InsertDuplicateUpdateColumnKeyFunc.KEY, new InsertDuplicateUpdateColumnKeyFunc());
@@ -89,6 +88,34 @@ public class MySQLKeyFuncManager extends KeyFuncManager {
         }
     }
 
+
+    /**
+     * This key function is used to fetch a writable, non-generated column for ALTER paths
+     * that cannot legally target generated columns.
+     */
+    private class MutableColumnKeyFunc implements KeyFunc {
+
+        public static final String KEY = "_mutable_column";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            List<AbstractTableColumn<?, ?>> mutableColumns = currentContext.getCurrentColumns().stream()
+                    .filter(column -> !column.isGenerated())
+                    .collect(Collectors.toList());
+
+            if (currentContext.getCurrentColumns().isEmpty()) {
+                currentContext.addFiller(new ColumnReferenceFiller(parent, this));
+                return;
+            }
+            if (mutableColumns.isEmpty()) {
+                throw new QueryGenerationException("There are no mutable columns.");
+            }
+
+            AbstractTableColumn<?, ?> column = Randomly.fromList(mutableColumns);
+            currentContext.addSelectedColumn(column);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, getColumnName(column))));
+        }
+    }
 
     /**
      * This key function is used to return an existing index. For example, DROP
@@ -333,7 +360,7 @@ public class MySQLKeyFuncManager extends KeyFuncManager {
             int colSize = currentContext.getReturnedColumns().size();
             for (int i = 0; i < colSize; i++) {
                 AbstractTableColumn<?, ?> col = currentContext.getReturnedColumns().poll();
-                String value = generateStressSafeValue(col);
+                String value = MySQLStressValueHelper.generateStressSafeValue(col, globalState);
                 ASTNode valueNode = new ASTNode(new Token(Token.TokenType.TERMINAL, value));
                 parent.addChild(valueNode);
                 if (i != colSize - 1) {
@@ -350,72 +377,9 @@ public class MySQLKeyFuncManager extends KeyFuncManager {
             int index = currentContext.getValueIndex();
             AbstractTableColumn<?, ?> column = currentContext.getSelectedColumns().get(index);
             currentContext.increaseValueIndex();
-            ASTNode valueNode = new ASTNode(new Token(Token.TokenType.TERMINAL, generateStressSafeValue(column)));
+            ASTNode valueNode = new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    MySQLStressValueHelper.generateStressSafeValue(column, globalState)));
             parent.addChild(valueNode);
-        }
-    }
-
-    private String generateStressSafeValue(AbstractTableColumn<?, ?> column) {
-        if (!(column instanceof MySQLSchema.MySQLColumn)) {
-            Generator generator = GeneratorRegister.getGenerator(column, globalState);
-            return generator.generate(globalState);
-        }
-        MySQLSchema.MySQLColumn mySQLColumn = (MySQLSchema.MySQLColumn) column;
-        String dataType = Objects.toString(mySQLColumn.getDataType(), "").toLowerCase();
-        switch (dataType) {
-            case "tinyint":
-            case "int1":
-            case "bool":
-            case "boolean":
-                return Randomly.fromOptions("-1", "0", "1");
-            case "smallint":
-            case "int2":
-                return Randomly.fromOptions("-1", "0", "1", "127");
-            case "mediumint":
-            case "int3":
-            case "int":
-            case "integer":
-            case "int4":
-            case "bigint":
-            case "int8":
-                return Randomly.fromOptions("-1", "0", "1", "42");
-            case "year":
-                return Randomly.fromOptions("1970", "2000", "2024");
-            case "bit":
-                return Randomly.fromOptions("b'0'", "b'1'");
-            case "float":
-            case "double":
-            case "decimal":
-            case "numeric":
-            case "dec":
-            case "fixed":
-                return Randomly.fromOptions("-1", "0", "1", "3.14", "12.5");
-            case "date":
-                return Randomly.fromOptions("'2000-01-01'", "'2024-12-31'");
-            case "time":
-                return Randomly.fromOptions("'00:00:01'", "'12:00:00'", "'23:59:59'");
-            case "datetime":
-            case "timestamp":
-                return Randomly.fromOptions("'2000-01-01 00:00:01'", "'2024-12-31 23:59:59'");
-            case "json":
-                return Randomly.fromOptions("'{}'", "'[]'", "'{\"k\":\"v\"}'", "'123'");
-            case "binary":
-            case "varbinary":
-            case "blob":
-            case "tinyblob":
-            case "mediumblob":
-            case "longblob":
-                return Randomly.fromOptions("X'00'", "X'01'", "X'4142'");
-            case "char":
-            case "varchar":
-            case "text":
-            case "tinytext":
-            case "mediumtext":
-            case "longtext":
-            case "enum":
-            case "set":
-            default:
-                return Randomly.fromOptions("'a'", "'b'", "'test'", "''");
         }
     }
 

@@ -1,6 +1,7 @@
 package dbradar.mysql.oracle;
 
 import dbradar.Main;
+import dbradar.IgnoreMeException;
 import dbradar.Randomly;
 import dbradar.SQLConnection;
 import dbradar.common.oracle.TestOracle;
@@ -18,18 +19,23 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class MySQLStressOracle implements TestOracle {
 
     private static final int MAX_QUERY_GEN_RETRIES = 80;
     private static final int MAX_EXEC_RETRIES = 5;
+    private static final long GLOBAL_SUCCESS_RATE_LOG_INTERVAL_MILLIS = 5_000L;
     private static final DateTimeFormatter TS_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+    private static final AtomicLong LAST_SUCCESS_RATE_LOG_AT_MILLIS = new AtomicLong(0L);
 
     private final MySQLGlobalState mainState;
     private volatile boolean initialized;
@@ -161,8 +167,11 @@ public class MySQLStressOracle implements TestOracle {
     }
 
     private void executeBatch(MySQLGlobalState state, int count, StatementKind kind) throws Exception {
+        if (kind == StatementKind.DML) {
+            state.updateSchema();
+        }
         for (int i = 0; i < count; i++) {
-            if (kind == StatementKind.DDL || kind == StatementKind.DML) {
+            if (kind == StatementKind.DDL) {
                 state.updateSchema();
             }
             if ((kind == StatementKind.DML || kind == StatementKind.QUERY)
@@ -176,7 +185,8 @@ public class MySQLStressOracle implements TestOracle {
                 }
                 continue;
             }
-            executeWithRetries(state, query.getQueryString(), kind, query.couldAffectSchema());
+            boolean refreshSchemaOnFailure = kind == StatementKind.DML && isInsertLike(query.getQueryString());
+            executeWithRetries(state, query.getQueryString(), kind, query.couldAffectSchema(), refreshSchemaOnFailure);
         }
     }
 
@@ -214,23 +224,122 @@ public class MySQLStressOracle implements TestOracle {
         if (tables.isEmpty()) {
             return null;
         }
-        MySQLTable table = Randomly.fromList(tables);
-        List<MySQLColumn> writableColumns = table.getColumns().stream()
-                .filter(col -> !col.isGenerated())
-                .collect(java.util.stream.Collectors.toList());
+        List<MySQLTable> writableTables = tables.stream()
+                .filter(table -> !getWritableColumns(table).isEmpty())
+                .collect(Collectors.toList());
+        if (writableTables.isEmpty()) {
+            return null;
+        }
+
+        List<MySQLTable> emptyWritableTables = new ArrayList<>();
+        for (MySQLTable table : writableTables) {
+            if (isEmptyTable(state, table)) {
+                emptyWritableTables.add(table);
+            }
+        }
+        if (!emptyWritableTables.isEmpty()) {
+            MySQLTable table = Randomly.fromList(emptyWritableTables);
+            return buildInsertLikeDml(state, table, getWritableColumns(table));
+        }
+
+        MySQLTable table = Randomly.fromList(writableTables);
+        List<MySQLColumn> writableColumns = getWritableColumns(table);
+        long rowCount = getRowCount(state, table);
         if (writableColumns.isEmpty()) {
-            return new SQLQueryAdapter("DELETE LOW_PRIORITY IGNORE FROM " + table.getName() + " WHERE 1 = 0");
+            return null;
+        }
+        if (rowCount <= 0) {
+            return buildInsertLikeDml(state, table, writableColumns);
+        }
+        if (rowCount == 1) {
+            return Randomly.getBoolean()
+                    ? buildInsertLikeDml(state, table, writableColumns)
+                    : buildUpdateDml(state, table, writableColumns);
+        }
+
+        if (Randomly.getBoolean()) {
+            SQLQueryAdapter deleteQuery = buildDeleteDml(state);
+            if (deleteQuery != null) {
+                return deleteQuery;
+            }
         }
         if (Randomly.getBoolean()) {
-            return new SQLQueryAdapter("DELETE LOW_PRIORITY IGNORE FROM " + table.getName() + " WHERE 1 = 0");
+            return buildInsertLikeDml(state, table, writableColumns);
         }
-        MySQLColumn column = Randomly.fromList(writableColumns);
-        return new SQLQueryAdapter(
-                "UPDATE IGNORE " + table.getName() + " SET " + column.getName() + " = " + column.getName() + " WHERE 1 = 0");
+        return buildUpdateDml(state, table, writableColumns);
     }
 
-    private void executeWithRetries(MySQLGlobalState state, String sql, StatementKind kind, boolean canAffectSchema)
-            throws Exception {
+    private List<MySQLColumn> getWritableColumns(MySQLTable table) {
+        return table.getColumns().stream()
+                .filter(col -> !col.isGenerated())
+                .collect(Collectors.toList());
+    }
+
+    private boolean isEmptyTable(MySQLGlobalState state, MySQLTable table) {
+        try {
+            return table.getNrRows(state) == 0;
+        } catch (IgnoreMeException ignored) {
+            return false;
+        }
+    }
+
+    private long getRowCount(MySQLGlobalState state, MySQLTable table) {
+        try {
+            return table.getNrRows(state);
+        } catch (IgnoreMeException ignored) {
+            return -1L;
+        }
+    }
+
+    private SQLQueryAdapter buildInsertLikeDml(MySQLGlobalState state, MySQLTable table, List<MySQLColumn> writableColumns) {
+        String keyword = isEmptyTable(state, table) || Randomly.getBoolean() ? "INSERT IGNORE INTO " : "REPLACE INTO ";
+        StringBuilder sb = new StringBuilder(keyword);
+        sb.append(table.getName());
+        sb.append(" (");
+        for (int i = 0; i < writableColumns.size(); i++) {
+            sb.append(writableColumns.get(i).getName());
+            if (i < writableColumns.size() - 1) {
+                sb.append(", ");
+            }
+        }
+        sb.append(") VALUES (");
+        for (int i = 0; i < writableColumns.size(); i++) {
+            sb.append(MySQLStressValueHelper.generateStressSafeValue(writableColumns.get(i), state));
+            if (i < writableColumns.size() - 1) {
+                sb.append(", ");
+            }
+        }
+        sb.append(")");
+        return new SQLQueryAdapter(sb.toString());
+    }
+
+    private SQLQueryAdapter buildUpdateDml(MySQLGlobalState state, MySQLTable table, List<MySQLColumn> writableColumns) {
+        MySQLColumn column = Randomly.fromList(writableColumns);
+        return new SQLQueryAdapter("UPDATE IGNORE " + table.getName() + " SET " + column.getName() + " = "
+                + MySQLStressValueHelper.generateStressSafeValue(column, state) + " LIMIT 1");
+    }
+
+    private SQLQueryAdapter buildDeleteDml(MySQLGlobalState state) {
+        List<MySQLTable> deleteSafeTables = getDeleteSafeTables(state);
+        if (deleteSafeTables.isEmpty()) {
+            return null;
+        }
+        MySQLTable table = Randomly.fromList(deleteSafeTables);
+        return new SQLQueryAdapter("DELETE FROM " + table.getName() + " LIMIT 1");
+    }
+
+    private List<MySQLTable> getDeleteSafeTables(MySQLGlobalState state) {
+        Set<String> referencedTableNames = state.getSchema().getForeignKeys().stream()
+                .map(foreignKey -> foreignKey.getReferencedTable().getName())
+                .collect(Collectors.toSet());
+        return state.getSchema().getDatabaseTablesWithoutViews().stream()
+                .filter(table -> !referencedTableNames.contains(table.getName()))
+                .filter(table -> getRowCount(state, table) > 0)
+                .collect(Collectors.toList());
+    }
+
+    private void executeWithRetries(MySQLGlobalState state, String sql, StatementKind kind, boolean canAffectSchema,
+                                    boolean refreshSchemaOnFailure) throws Exception {
         SQLException lastException = null;
         int attempts = 0;
         for (int retry = 0; retry < MAX_EXEC_RETRIES; retry++) {
@@ -240,6 +349,7 @@ public class MySQLStressOracle implements TestOracle {
                 Main.nrQueries.incrementAndGet();
                 Main.nrSuccessfulActions.incrementAndGet();
                 logExecution(state, sql, kind, true, null, attempts);
+                maybeLogGlobalSuccessRate(state);
                 return;
             } catch (SQLException e) {
                 lastException = e;
@@ -247,6 +357,8 @@ public class MySQLStressOracle implements TestOracle {
                     Main.nrQueries.incrementAndGet();
                     Main.nrUnsuccessfulActions.incrementAndGet();
                     logExecution(state, sql, kind, false, e, 1);
+                    refreshSchemaAfterFailure(state, canAffectSchema || refreshSchemaOnFailure);
+                    maybeLogGlobalSuccessRate(state);
                     ensureAtLeastOneTable(state);
                     return;
                 }
@@ -255,9 +367,8 @@ public class MySQLStressOracle implements TestOracle {
                     Main.nrQueries.incrementAndGet();
                     Main.nrUnsuccessfulActions.incrementAndGet();
                     logExecution(state, sql, kind, false, e, 1);
-                    if (canAffectSchema) {
-                        state.updateSchema();
-                    }
+                    refreshSchemaAfterFailure(state, canAffectSchema || refreshSchemaOnFailure);
+                    maybeLogGlobalSuccessRate(state);
                     if (state.getSchema().getDatabaseTables().isEmpty()) {
                         ensureAtLeastOneTable(state);
                     }
@@ -272,7 +383,55 @@ public class MySQLStressOracle implements TestOracle {
             Main.nrQueries.incrementAndGet();
             Main.nrUnsuccessfulActions.incrementAndGet();
             logExecution(state, sql, kind, false, lastException, attempts);
+            refreshSchemaAfterFailure(state, canAffectSchema || refreshSchemaOnFailure);
+            maybeLogGlobalSuccessRate(state);
         }
+    }
+
+    public static void resetGlobalSuccessRateLogging() {
+        LAST_SUCCESS_RATE_LOG_AT_MILLIS.set(0L);
+    }
+
+    private static void maybeLogGlobalSuccessRate(MySQLGlobalState state) {
+        maybeLogGlobalSuccessRate(state, System.currentTimeMillis());
+    }
+
+    private static void maybeLogGlobalSuccessRate(MySQLGlobalState state, long nowMillis) {
+        long success = Main.nrSuccessfulActions.get();
+        long fail = Main.nrUnsuccessfulActions.get();
+        long total = success + fail;
+        if (total <= 0) {
+            return;
+        }
+
+        while (true) {
+            long lastLoggedAt = LAST_SUCCESS_RATE_LOG_AT_MILLIS.get();
+            if (nowMillis - lastLoggedAt < GLOBAL_SUCCESS_RATE_LOG_INTERVAL_MILLIS) {
+                return;
+            }
+            if (LAST_SUCCESS_RATE_LOG_AT_MILLIS.compareAndSet(lastLoggedAt, nowMillis)) {
+                String message = formatGlobalSuccessRateMessage(success, fail, total);
+                System.out.println(message);
+                if (state != null && state.getLogger() != null && state.getOptions() != null
+                        && state.getOptions().logEachSelect()) {
+                    state.getLogger().writeCurrent(message);
+                }
+                return;
+            }
+        }
+    }
+
+    private static String formatGlobalSuccessRateMessage(long success, long fail, long total) {
+        double ratio = total == 0 ? 0.0 : (success * 100.0) / total;
+        return String.format("[MYSQL-STRESS] global SQL success rate: %.2f%% (success=%d, fail=%d, total=%d)",
+                ratio, success, fail, total);
+    }
+
+    private void refreshSchemaAfterFailure(MySQLGlobalState state, boolean shouldRefreshSchema) throws Exception {
+        if (!shouldRefreshSchema) {
+            return;
+        }
+        state.updateSchema();
     }
 
     private static boolean shouldRetry(SQLException e) {
@@ -346,6 +505,11 @@ public class MySQLStressOracle implements TestOracle {
         }
         int code = e.getErrorCode();
         return code == 1051 || code == 1146;
+    }
+
+    private boolean isInsertLike(String sql) {
+        String normalized = sql == null ? "" : sql.trim().toUpperCase();
+        return normalized.startsWith("INSERT ") || normalized.startsWith("REPLACE ");
     }
 
     private void logExecution(MySQLGlobalState state, String sql, StatementKind kind,

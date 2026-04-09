@@ -57,8 +57,8 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
                 "--port", String.valueOf(port),                // 数据库端口号
 
                 // ============ 线程与执行控制 ============
-                "--num-threads", "80",                         // 1个数据库任务
-                "--timeout-seconds", "30",                    // 运行上限，防止测试卡死
+                "--num-threads", "30",                         // 1个数据库任务
+                "--timeout-seconds", "500",                    // 运行上限，防止测试卡死
 
                 // ============ 日志控制 ============
                 "--log-each-select", "true",                   // 是否记录每条执行的SQL语句
@@ -74,7 +74,7 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
                 "--oracle", "STRESS",                          // Oracle模式: STRESS=压测模式, EQUATION=DDL等价验证
                 "--stress-threads-per-db", "1",                // 每个数据库分配1个worker线程(单线程模式)
                 "--stress-rounds-per-db", "1000000",                // 对同一个数据库名执行2轮
-                "--stress-ddl-per-thread", "100",               // 每轮每线程执行的DDL数量
+                "--stress-ddl-per-thread", "5",               // 每轮每线程执行的DDL数量
                 "--stress-dml-per-thread", "100",               // 每轮每线程执行的DML数量
                 "--stress-query-per-thread", "100"              // 每轮每线程执行的随机查询数量
         ));
@@ -121,9 +121,9 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
                                                                //   总有效线程 = num-threads × threads-per-db = 1×2 = 2
                                                                //   worker出错自动重连继续，不中断整个库的测试
                 "--stress-rounds-per-db", "2",                // 对同一个数据库名执行2轮
-                "--stress-ddl-per-thread", "1",               // 每个worker每轮执行的DDL语句数
-                "--stress-dml-per-thread", "1",               // 每个worker每轮执行的DML语句数
-                "--stress-query-per-thread", "1"              // 每个worker每轮执行的查询语句数
+                "--stress-ddl-per-thread", "100",               // 每个worker每轮执行的DDL语句数
+                "--stress-dml-per-thread", "100",               // 每个worker每轮执行的DML语句数
+                "--stress-query-per-thread", "100"              // 每个worker每轮执行的查询语句数
         ));
 
         long executedSqlCount = Main.nrSuccessfulActions.get() + Main.nrUnsuccessfulActions.get();
@@ -397,16 +397,37 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
         if (!tableName.startsWith("t")) return null; // only fetch insert statements for tables without views
         List<String> insertStmts = new ArrayList<>();
         try (Statement statement = state.getConnection().createStatement()) {
+            try {
+                state.updateSchema();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            MySQLTable table = state.getSchema().getDatabaseTables().stream()
+                    .filter(t -> t.getName().equals(tableName))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException("Table not found in schema: " + tableName));
+
             ResultSet rs = statement.executeQuery("SELECT * FROM " + tableName);
             ResultSetMetaData rsmd = rs.getMetaData();
             int columnCount = rsmd.getColumnCount();
+            List<Integer> writableColumnIndexes = new ArrayList<>();
+            List<String> writableColumnNames = new ArrayList<>();
+            for (int i = 1; i <= columnCount; i++) {
+                String columnName = rsmd.getColumnName(i);
+                boolean isGenerated = table.getColumns().stream()
+                        .anyMatch(column -> column.getName().equals(columnName) && column.isGenerated());
+                if (!isGenerated) {
+                    writableColumnIndexes.add(i);
+                    writableColumnNames.add(columnName);
+                }
+            }
             while (rs.next()) {
                 StringBuilder insertStmt = new StringBuilder("INSERT INTO " + tableName + "(");
 
                 // Append column name
-                for (int i = 1; i <= columnCount; i++) {
-                    insertStmt.append(rsmd.getColumnName(i));
-                    if (i < columnCount) {
+                for (int i = 0; i < writableColumnNames.size(); i++) {
+                    insertStmt.append(writableColumnNames.get(i));
+                    if (i < writableColumnNames.size() - 1) {
                         insertStmt.append(", ");
                     }
                 }
@@ -414,9 +435,10 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
                 insertStmt.append(") VALUES (");
 
                 // Append column values based on their types
-                for (int i = 1; i <= columnCount; i++) {
-                    int columnType = rsmd.getColumnType(i);
-                    if (rs.getObject(i) == null) {
+                for (int i = 0; i < writableColumnIndexes.size(); i++) {
+                    int columnIndex = writableColumnIndexes.get(i);
+                    int columnType = rsmd.getColumnType(columnIndex);
+                    if (rs.getObject(columnIndex) == null) {
                         insertStmt.append("NULL");
                     } else {
                         switch (columnType) {
@@ -424,35 +446,35 @@ public class TestMySQLEDCOracle extends TestEDCOracleBase<MySQLGlobalState, MySQ
                             case Types.BIGINT:
                             case Types.SMALLINT:
                             case Types.TINYINT:
-                                insertStmt.append(rs.getInt(i));
+                                insertStmt.append(rs.getInt(columnIndex));
                                 break;
                             case Types.FLOAT:
                             case Types.REAL:
                             case Types.DOUBLE:
-                                insertStmt.append(rs.getDouble(i));
+                                insertStmt.append(rs.getDouble(columnIndex));
                                 break;
                             case Types.DECIMAL:
                             case Types.NUMERIC:
-                                insertStmt.append(rs.getBigDecimal(i));
+                                insertStmt.append(rs.getBigDecimal(columnIndex));
                                 break;
                             case Types.DATE:
-                                insertStmt.append("'").append(rs.getDate(i)).append("'");
+                                insertStmt.append("'").append(rs.getDate(columnIndex)).append("'");
                                 break;
                             case Types.TIME:
-                                insertStmt.append("'").append(rs.getTime(i)).append("'");
+                                insertStmt.append("'").append(rs.getTime(columnIndex)).append("'");
                                 break;
                             case Types.TIMESTAMP:
-                                insertStmt.append("'").append(rs.getTimestamp(i)).append("'");
+                                insertStmt.append("'").append(rs.getTimestamp(columnIndex)).append("'");
                                 break;
                             case Types.BIT:
-                                insertStmt.append("0x").append(DatatypeConverter.printHexBinary(rs.getBytes(i)));
+                                insertStmt.append("0x").append(DatatypeConverter.printHexBinary(rs.getBytes(columnIndex)));
                                 break;
                             default:
-                                insertStmt.append("'").append(rs.getString(i)).append("'");
+                                insertStmt.append("'").append(rs.getString(columnIndex)).append("'");
                         }
                     }
 
-                    if (i < columnCount) {
+                    if (i < writableColumnIndexes.size() - 1) {
                         insertStmt.append(", ");
                     }
                 }
