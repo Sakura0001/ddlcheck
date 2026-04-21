@@ -7,8 +7,6 @@ import java.sql.Statement;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import com.mysql.cj.jdbc.exceptions.CommunicationsException;
-
 import dbradar.GlobalState;
 import dbradar.Main;
 import dbradar.SQLConnection;
@@ -171,9 +169,6 @@ public class SQLQueryAdapter extends QueryAdapter {
                 String errorType = globalState.getRegexErrorTypes().get(regex);
 //                throw new AssertionError("\t**** " + errorType + ": " + e.getMessage());
             }
-        }
-        if (e instanceof CommunicationsException) {
-            throw new AssertionError("\t****  Communication Error: " + e.getMessage());
         }
     }
 

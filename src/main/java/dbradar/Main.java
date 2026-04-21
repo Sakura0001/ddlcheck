@@ -19,13 +19,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.JCommander.Builder;
-import dbradar.cockroachdb.CockroachDBProvider;
-import dbradar.mysql.MySQLOptions;
-import dbradar.mysql.MySQLProvider;
-import dbradar.mysql.oracle.MySQLStressOracle;
 import dbradar.postgresql.PostgreSQLProvider;
-import dbradar.sqlite3.SQLite3Provider;
-import dbradar.tidb.TiDBProvider;
 
 public final class Main {
 
@@ -57,7 +51,6 @@ public final class Main {
         nrSuccessfulActions.set(0);
         nrUnsuccessfulActions.set(0);
         threadsShutdown.set(0);
-        MySQLStressOracle.resetGlobalSuccessRateLogging();
         StateLogger.resetInitializedProviders();
 
         List<DatabaseProvider> providers = getDBMSProviders();
@@ -78,13 +71,12 @@ public final class Main {
             return options.getErrorExitCode();
         }
         DBMSExecutorFactory<?> executorFactory = nameToProvider.get(jc.getParsedCommand());
-        boolean roundBasedStress = isRoundBasedMySQLStress(executorFactory.getCommand());
-        if (!roundBasedStress && options.getTotalNumberTries() <= 0) {
+        if (options.getTotalNumberTries() <= 0) {
             System.err.printf("Invalid --num-tries value: %d. It must be greater than 0.%n",
                     options.getTotalNumberTries());
             return options.getErrorExitCode();
         }
-        final int taskCount = roundBasedStress ? options.getNumberConcurrentThreads() : options.getTotalNumberTries();
+        final int taskCount = options.getTotalNumberTries();
         if (taskCount <= 0) {
             System.err.printf("Invalid task count: %d. It must be greater than 0.%n", taskCount);
             return options.getErrorExitCode();
@@ -154,7 +146,7 @@ public final class Main {
                 private void runThread(final String databaseName) {
                     Randomly r = new Randomly(seed);
                     try {
-                        int maxNrDbs = roundBasedStress ? 1 : options.getMaxGeneratedDatabases();
+                        int maxNrDbs = options.getMaxGeneratedDatabases();
                         // run without a limit if maxNrDbs == -1
                         for (int i = 0; i < maxNrDbs || maxNrDbs == -1; i++) {
                             Boolean continueRunning = run(options, execService, executorFactory, r, databaseName);
@@ -216,10 +208,6 @@ public final class Main {
         return someOneFails.get() ? options.getErrorExitCode() : 0;
     }
 
-    private static boolean isRoundBasedMySQLStress(DBMSSpecificOptions command) {
-        return command instanceof MySQLOptions && ((MySQLOptions) command).useStress();
-    }
-
     /**
      * To register a new provider, it is necessary to implement the DatabaseProvider
      * interface and add an additional configuration file, see
@@ -232,11 +220,7 @@ public final class Main {
      */
     static List<DatabaseProvider> getDBMSProviders() {
         List<DatabaseProvider> providers = new ArrayList<>();
-        providers.add(new CockroachDBProvider());
-        providers.add(new MySQLProvider());
         providers.add(new PostgreSQLProvider());
-        providers.add(new SQLite3Provider());
-        providers.add(new TiDBProvider());
 
         return providers;
     }

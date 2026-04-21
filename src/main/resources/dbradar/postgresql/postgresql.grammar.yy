@@ -867,7 +867,7 @@ order_by_option:
     ORDER BY _column order_option?     @disable-symbol compound_op
 
 limit_option:
-    @disable-query {\bLIMIT\b.*\b(?:IN|ALL|ANY|SOME)\b}  # MySQL 8.3.0 doesn't yet support 'LIMIT & IN/ALL/ANY/SOME subquery'
+    @disable-query {\bLIMIT\b.*\b(?:IN|ALL|ANY|SOME)\b}
     LIMIT _int32_unsigned offset?
 
 simple_select_without_temp:

@@ -16,7 +16,6 @@ public final class StateLogger {
     private final File loggerFile;
     private File curFile;
     private File queryPlanFile;
-    private File reduceFile;
     public FileWriter logFileWriter;
     public FileWriter currentFileWriter;
     private FileWriter queryPlanFileWriter;
@@ -31,7 +30,6 @@ public final class StateLogger {
         }
     }
 
-    private final boolean useReducer;
     private final DatabaseProvider databaseProvider;
     private String databaseName;
     private String dbmsName;
@@ -71,15 +69,6 @@ public final class StateLogger {
         logQueryPlan = options.logQueryPlan();
         if (logQueryPlan) {
             queryPlanFile = new File(dir, databaseName + "-plan.log");
-        }
-        this.useReducer = options.useReducer();
-        if (useReducer) {
-            File reduceFileDir = new File(dir, "reduce");
-            if (!reduceFileDir.exists()) {
-                reduceFileDir.mkdir();
-            }
-            this.reduceFile = new File(reduceFileDir, databaseName + "-reduce.log");
-
         }
         this.databaseProvider = provider;
     }
@@ -154,20 +143,6 @@ public final class StateLogger {
         return queryPlanFileWriter;
     }
 
-    public FileWriter getReduceFileWriter() {
-        if (!useReducer) {
-            throw new UnsupportedOperationException();
-        }
-        FileWriter fileWriter;
-        try {
-            fileWriter = new FileWriter(reduceFile, false);
-        } catch (IOException e) {
-            throw new AssertionError(e);
-        }
-
-        return fileWriter;
-    }
-
     public void writeCurrent(StateToReproduce state) {
         if (!logEachSelect) {
             throw new UnsupportedOperationException();
@@ -212,30 +187,6 @@ public final class StateLogger {
         } catch (IOException e) {
             throw new AssertionError();
         }
-    }
-
-    public void logReduced(StateToReproduce state) {
-        FileWriter reduceFileWriter = getReduceFileWriter();
-
-        StringBuilder sb = new StringBuilder();
-        for (Query s : state.getStatements()) {
-            sb.append(databaseProvider.getLoggableFactory().createLoggable(s.getLogString()).getLogString());
-        }
-        try {
-            reduceFileWriter.write(sb.toString());
-
-        } catch (IOException e) {
-            throw new AssertionError(e);
-        } finally {
-            try {
-                reduceFileWriter.flush();
-                reduceFileWriter.close();
-            } catch (IOException e) {
-                // TODO Auto-generated catch block
-                e.printStackTrace();
-            }
-        }
-
     }
 
     public void logException(Throwable reduce, StateToReproduce state) {

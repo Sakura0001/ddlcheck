@@ -8,13 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class TestGlobalStateResourceLoading {
 
     @Test
-    public void testReadClasspathResourceLoadsMysqlGrammarText() {
-        String grammar = GlobalState.readClasspathResource("dbradar/mysql/mysql.grammar.yy");
+    public void testReadClasspathResourceLoadsPostgreSQLGrammarText() {
+        String grammar = GlobalState.readClasspathResource("dbradar/postgresql/postgresql.grammar.yy");
 
         assertFalse(grammar.isEmpty(), "grammar resource should not be empty");
         assertTrue(grammar.contains("create_table:"),
-                "mysql grammar resource should contain the create_table production");
-        assertTrue(grammar.contains("engine_option:"),
-                "mysql grammar resource should contain engine_option production");
+                "postgresql grammar resource should contain the create_table production");
+        assertTrue(grammar.contains("alter_table:"),
+                "postgresql grammar resource should contain the alter_table production");
     }
 }

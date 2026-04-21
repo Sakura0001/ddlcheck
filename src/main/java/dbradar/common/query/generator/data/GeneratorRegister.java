@@ -139,7 +139,7 @@ public class GeneratorRegister {
         basicGenerators.put("double", new DoubleGenerator(-Double.MAX_VALUE, Double.MAX_VALUE, ""));
         basicGenerators.put("double_unsigned", new DoubleGenerator(0, Double.MAX_VALUE, ""));
 
-        // duckdb type aliases https://duckdb.org/docs/sql/data_types/numeric.html
+        // Numeric aliases used by PostgreSQL grammar and shared generators.
         basicGenerators.put("boolean", new BoolGenerator());
         basicGenerators.put("int1", new IntGenerator(-128, 127, ""));
         basicGenerators.put("smallint", new IntGenerator(-32768, 32767, ""));
@@ -156,14 +156,11 @@ public class GeneratorRegister {
         basicGenerators.put("ubigint", new DoubleGenerator(0, Double.MAX_VALUE, ""));
         basicGenerators.put("float4", new DoubleGenerator(-3.40282e+38, 3.40282e+38, ""));
 
-        // mysql type
         basicGenerators.put("bit", new BitGenerator());
 
-        // postgresql inet
         basicGenerators.put("inet", new InetGenerator());
         basicGenerators.put("range", new RangeGenerator(Randomly.getBoolean(), Randomly.getBoolean()));
 
-        // cockroachdb interval
         basicGenerators.put("interval", new IntervalGenerator());
 
         //dameng

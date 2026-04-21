@@ -12,20 +12,8 @@ public final class JdbcDrivers {
     }
 
     public static void ensureDriverLoaded(String jdbcUrl) throws SQLException {
-        if (jdbcUrl.startsWith("jdbc:mysql:")) {
-            loadDriverClass("com.mysql.cj.jdbc.Driver", jdbcUrl);
-            return;
-        }
-        if (jdbcUrl.startsWith("jdbc:mariadb:")) {
-            loadDriverClass("org.mariadb.jdbc.Driver", jdbcUrl);
-            return;
-        }
         if (jdbcUrl.startsWith("jdbc:postgresql:")) {
             loadDriverClass("org.postgresql.Driver", jdbcUrl);
-            return;
-        }
-        if (jdbcUrl.startsWith("jdbc:sqlite:")) {
-            loadDriverClass("org.sqlite.JDBC", jdbcUrl);
         }
     }
 

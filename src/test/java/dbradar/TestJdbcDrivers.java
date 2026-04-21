@@ -13,20 +13,20 @@ import org.junit.jupiter.api.Test;
 public class TestJdbcDrivers {
 
     @Test
-    public void testEnsureDriverLoadedRegistersMySQLDriverWithoutSpiMetadata() throws Exception {
-        String url = "jdbc:mysql://localhost:3306/test";
+    public void testEnsureDriverLoadedRegistersPostgreSQLDriverWithoutSpiMetadata() throws Exception {
+        String url = "jdbc:postgresql://localhost:5432/test";
         List<Driver> removedDrivers = new ArrayList<>();
         deregisterDriversAccepting(url, removedDrivers);
 
         try {
             Assertions.assertThrows(SQLException.class, () -> DriverManager.getDriver(url),
-                    "mysql URL should not have a registered driver after deregistration");
+                    "postgresql URL should not have a registered driver after deregistration");
 
             JdbcDrivers.ensureDriverLoaded(url);
 
             Driver driver = DriverManager.getDriver(url);
-            Assertions.assertEquals("com.mysql.cj.jdbc.Driver", driver.getClass().getName(),
-                    "explicit driver loading should restore the mysql JDBC driver");
+            Assertions.assertEquals("org.postgresql.Driver", driver.getClass().getName(),
+                    "explicit driver loading should restore the postgresql JDBC driver");
         } finally {
             deregisterDriversAccepting(url, new ArrayList<>());
             for (Driver driver : removedDrivers) {

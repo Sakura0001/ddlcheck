@@ -26,8 +26,6 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
     protected static String databaseName;
     protected boolean init = true;
     protected static int maxLength = 10;
-    protected static int totalSequences = 0;
-    protected static int uniqueSequences = 0;
 
     protected static final ExpectedErrors EXPECTED_QUERY_ERRORS = new ExpectedErrors();
     protected static final ExpectedErrors UNEXPECTED_DDL_ERRORS = new ExpectedErrors();
@@ -64,10 +62,6 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
             if (foundBug) {
                 throw new AssertionError(errorMessage);
             }
-
-            String countNum = String.format("We generate %d sequences and %d are unique", totalSequences, uniqueSequences);
-            genState.getState().logStatement(countNum);
-            genState.getLogger().writeCurrent(countNum);
 
             synthesizeState(); // check the correctness of DDL
 

@@ -123,30 +123,6 @@ public class MainOptions {
     @Parameter(names = "--database-prefix", description = "The prefix used for each database created")
     private String databasePrefix = "database"; // NOPMD
 
-    @Parameter(names = "--use-reducer", description = "EXPERIMENTAL Attempt to reduce queries using a simple reducer")
-    private boolean useReducer = false; // NOPMD
-
-    @Parameter(names = "--reduce-ast", description = "EXPERIMENTAL perform AST reduction after statement reduction")
-    private boolean reduceAST = false; // NOPMD
-
-    @Parameter(names = "--duplicate-detection", description = "EXPERIMENTAL find 5 most similar test case")
-    private boolean duplicateDetection = false; // NOPMD
-
-    @Parameter(names = "--recalculate-weight", description = "EXPERIMENTAL recalculate the weight of similarity")
-    private boolean reCalculateWeight = false; // NOPMD
-
-    @Parameter(names = "--statement-reducer-max-steps", description = "EXPERIMENTAL Maximum steps the statement reducer will do")
-    private long maxStatementReduceSteps = NO_REDUCE_LIMIT; // NOPMD
-
-    @Parameter(names = "--statement-reducer-max-time", description = "EXPERIMENTAL Maximum time duration (secs) the AST-based reducer will do")
-    private long maxASTReduceTime = NO_REDUCE_LIMIT; // NOPMD
-
-    @Parameter(names = "--ast-reducer-max-steps", description = "EXPERIMENTAL Maximum steps the AST-based reducer will do")
-    private long maxASTReduceSteps = NO_REDUCE_LIMIT; // NOPMD
-
-    @Parameter(names = "--ast-reducer-max-time", description = "EXPERIMENTAL Maximum time duration (secs) the statement reducer will do")
-    private long maxStatementReduceTime = NO_REDUCE_LIMIT; // NOPMD
-
     @Parameter(names = "--validate-result-size-only", description = "Should validate result size only and skip comparing content of the result set ", arity = 1)
     private boolean validateResultSizeOnly = false; // NOPMD
 
@@ -342,30 +318,6 @@ public class MainOptions {
         return useConnectionTest;
     }
 
-    public boolean useReducer() {
-        return useReducer;
-    }
-
-    public boolean reduceAST() {
-        return reduceAST;
-    }
-
-    public long getMaxStatementReduceSteps() {
-        return maxStatementReduceSteps;
-    }
-
-    public long getMaxStatementReduceTime() {
-        return maxStatementReduceTime;
-    }
-
-    public long getMaxASTReduceSteps() {
-        return maxASTReduceSteps;
-    }
-
-    public long getMaxASTReduceTime() {
-        return maxASTReduceTime;
-    }
-
     public boolean validateResultSizeOnly() {
         return validateResultSizeOnly;
     }
@@ -396,14 +348,6 @@ public class MainOptions {
 
     public String getCaseFile() {
         return caseFile;
-    }
-
-    public boolean isDuplicateDetection() {
-        return duplicateDetection;
-    }
-
-    public boolean isReCalculateWeight() {
-        return reCalculateWeight;
     }
 
     public double getExeTimeMinutes(){
