@@ -108,7 +108,7 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
     private void populateBootstrapDml() throws SQLException {
         int targetSuccessfulDml = genState.getOptions().getDmlCount();
         int maxAttempts = Math.max(MIN_BOOTSTRAP_ATTEMPTS, targetSuccessfulDml * genState.getOptions().getNrStatementRetryCount());
-        int successfulStatements = 0;
+        int successfulStatements = populateRequiredBootstrapDml();
 
         for (int attempts = 0; attempts < maxAttempts && successfulStatements < targetSuccessfulDml; attempts++) {
             try {
@@ -125,6 +125,10 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
                     "Expected %d successful bootstrap DML statements but observed %d",
                     targetSuccessfulDml, successfulStatements));
         }
+    }
+
+    protected int populateRequiredBootstrapDml() throws SQLException {
+        return 0;
     }
 
     protected boolean checkDMLStmt() throws SQLException {

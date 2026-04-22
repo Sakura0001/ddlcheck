@@ -7,6 +7,7 @@ import dbradar.common.oracle.edc.EDCBase;
 import dbradar.common.query.SQLQueryAdapter;
 import dbradar.common.query.generator.QueryGenerationException;
 import dbradar.postgresql.PostgreSQLGlobalState;
+import dbradar.postgresql.PostgreSQLGeneratedColumnSupport;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLQueryProvider;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDDLStmt;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDMLStmt;
@@ -23,6 +24,7 @@ import java.util.List;
 public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
 
     private static final int MAX_BOOTSTRAP_GENERATION_ATTEMPTS = 1000;
+    private PostgreSQLGeneratedColumnSupport.GeneratedColumnScenario bootstrapGeneratedColumnScenario;
 
     public PostgreSQLEDCOracle(PostgreSQLGlobalState state) {
         super(state);
@@ -34,7 +36,26 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
     @Override
     public void generateState(List<String> ddlSeq, int targetDdlCount) throws Exception {
         ddlSeq.clear();
-        getDDLSequence(ddlSeq, targetDdlCount);
+        int randomDdlTarget = Math.max(targetDdlCount - 1, 0);
+        if (randomDdlTarget > 0) {
+            getDDLSequence(ddlSeq, randomDdlTarget);
+        }
+        appendGeneratedColumnBootstrapTable(ddlSeq);
+    }
+
+    @Override
+    protected int populateRequiredBootstrapDml() throws SQLException {
+        if (bootstrapGeneratedColumnScenario == null) {
+            return 0;
+        }
+
+        String insert = bootstrapGeneratedColumnScenario.getInsertQuery().getQueryString();
+        if (!checkStmt(insert, false)) {
+            throw new AssertionError("Unable to insert into the bootstrap generated-column table: "
+                    + bootstrapGeneratedColumnScenario.getTableName());
+        }
+        checkDQLStmt(bootstrapGeneratedColumnScenario.getValidationQuery());
+        return 1;
     }
 
 
@@ -104,6 +125,15 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                     PostgreSQLDDLStmt.DROP_VIEW);
         }
         return Randomly.fromOptions(PostgreSQLDDLStmt.values());
+    }
+
+    private void appendGeneratedColumnBootstrapTable(List<String> ddlSeq) throws Exception {
+        bootstrapGeneratedColumnScenario = PostgreSQLGeneratedColumnSupport.createStoredGeneratedTable(genState);
+        try (Statement stmt = genState.getConnection().createStatement()) {
+            stmt.execute(bootstrapGeneratedColumnScenario.getCreateTableQuery().getQueryString());
+            genState.updateSchema();
+            ddlSeq.add(bootstrapGeneratedColumnScenario.getCreateTableQuery().getQueryString());
+        }
     }
 
     @Override
@@ -193,7 +223,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                     }
                     createStmts.add(new SQLQueryAdapter(createView.toString()));
                 } else {
-                    String fetchColumnInfo = String.format("SELECT column_name, data_type, collation_name, character_maximum_length, column_default, is_nullable, is_generated, generation_expression, identity_generation FROM information_schema.columns WHERE table_name = '%s' ORDER BY column_name", tableName);
+                    String fetchColumnInfo = String.format("SELECT column_name, data_type, collation_name, character_maximum_length, column_default, is_nullable, is_generated, generation_expression, identity_generation FROM information_schema.columns WHERE table_name = '%s' ORDER BY ordinal_position", tableName);
                     ResultSet columnRes = statement.executeQuery(fetchColumnInfo);
                     List<String> columns = new ArrayList<>();
                     while (columnRes.next()) {
@@ -201,7 +231,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                         String dataType = columnRes.getString("data_type");
                         String collation = columnRes.getString("collation_name");
                         String dataLength = columnRes.getString("character_maximum_length"); // for a character or bit string
-                        boolean isNullable = columnRes.getBoolean("is_nullable");
+                        boolean isNullable = "YES".equals(columnRes.getString("is_nullable"));
                         String hasDefault = columnRes.getString("column_default");
                         String isGenerated = columnRes.getString("is_generated");
                         String generatedExpression = columnRes.getString("generation_expression");

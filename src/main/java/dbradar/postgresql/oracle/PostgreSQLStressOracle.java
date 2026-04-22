@@ -7,6 +7,7 @@ import dbradar.common.query.DBRadarResultSet;
 import dbradar.common.query.SQLQueryAdapter;
 import dbradar.common.query.generator.QueryGenerationException;
 import dbradar.postgresql.PostgreSQLGlobalState;
+import dbradar.postgresql.PostgreSQLGeneratedColumnSupport;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDDLStmt;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDMLStmt;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLQueryProvider;
@@ -48,6 +49,7 @@ public final class PostgreSQLStressOracle implements TestOracle {
 
     private final PostgreSQLGlobalState state;
     private boolean initialized;
+    private PostgreSQLGeneratedColumnSupport.GeneratedColumnScenario bootstrapGeneratedColumnScenario;
     private int nextStatementKindIndex = Randomly.getNotCachedInteger(0, StressStatementKind.values().length);
 
     public PostgreSQLStressOracle(PostgreSQLGlobalState state) {
@@ -81,8 +83,9 @@ public final class PostgreSQLStressOracle implements TestOracle {
 
     private void bootstrapDdl() throws Exception {
         int successCount = 0;
+        int targetRandomDdl = Math.max(state.getOptions().getDdlCount() - 1, 0);
         int attempts = 0;
-        while (successCount < state.getOptions().getDdlCount()) {
+        while (successCount < targetRandomDdl) {
             if (attempts++ >= MAX_BOOTSTRAP_ATTEMPTS) {
                 throw new AssertionError("Unable to satisfy the requested successful DDL bootstrap count");
             }
@@ -90,10 +93,16 @@ public final class PostgreSQLStressOracle implements TestOracle {
                 successCount++;
             }
         }
+        if (!executeGeneratedColumnBootstrapDdl()) {
+            throw new AssertionError("Unable to create the mandatory generated-column table during stress bootstrap");
+        }
     }
 
     private void bootstrapDml() throws Exception {
-        int successCount = 0;
+        if (!executeGeneratedColumnBootstrapDml()) {
+            throw new AssertionError("Unable to insert into the mandatory generated-column table during stress bootstrap");
+        }
+        int successCount = 1;
         int maxAttempts = Math.max(MAX_BOOTSTRAP_ATTEMPTS,
                 state.getOptions().getDmlCount() * state.getOptions().getNrStatementRetryCount());
         int attempts = 0;
@@ -242,6 +251,25 @@ public final class PostgreSQLStressOracle implements TestOracle {
         }
 
         return Randomly.fromOptions(PostgreSQLDDLStmt.values());
+    }
+
+    private boolean executeGeneratedColumnBootstrapDdl() throws Exception {
+        bootstrapGeneratedColumnScenario = PostgreSQLGeneratedColumnSupport.createStoredGeneratedTable(state);
+        return executeStatement(bootstrapGeneratedColumnScenario.getCreateTableQuery());
+    }
+
+    private boolean executeGeneratedColumnBootstrapDml() throws Exception {
+        if (bootstrapGeneratedColumnScenario == null) {
+            return false;
+        }
+        boolean success = executeStatement(bootstrapGeneratedColumnScenario.getInsertQuery());
+        if (!success) {
+            return false;
+        }
+        try (DBRadarResultSet ignored = bootstrapGeneratedColumnScenario.getValidationQuery()
+                .executeAndGet(state.getConnection(), false)) {
+            return ignored != null;
+        }
     }
 
     private enum StressStatementKind {
