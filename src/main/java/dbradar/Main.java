@@ -10,16 +10,21 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.JCommander.Builder;
+import dbradar.postgresql.PostgreSQLOptions;
 import dbradar.postgresql.PostgreSQLProvider;
+import dbradar.postgresql.oracle.PostgreSQLStressOracle;
 
 public final class Main {
 
@@ -64,6 +69,7 @@ public final class Main {
             return options.getErrorExitCode();
         }
 
+        resetRuntimeState();
         Randomly.initialize(options);
         if (options.printProgressInformation()) {
             startProgressMonitor();
@@ -95,6 +101,9 @@ public final class Main {
 
         ExecutorService execService = Executors.newFixedThreadPool(options.getNumberConcurrentThreads());
         DBMSExecutorFactory<?> executorFactory = nameToProvider.get(jc.getParsedCommand());
+        PostgreSQLOptions postgreSQLOptions = executorFactory.getCommand() instanceof PostgreSQLOptions
+                ? (PostgreSQLOptions) executorFactory.getCommand()
+                : null;
 
         if (options.performConnectionTest()) {
             try {
@@ -109,73 +118,8 @@ public final class Main {
         }
         final AtomicBoolean someOneFails = new AtomicBoolean(false);
         final List<Map<Integer, Map<Integer, Integer>>> seqCounterList = new ArrayList<>();
-
-        for (int i = 0; i < options.getTotalNumberTries(); i++) {
-            final String databaseName = options.getDatabasePrefix() + i;
-            final long seed;
-            if (options.getRandomSeed() == -1) {
-                seed = System.currentTimeMillis() + i;
-            } else {
-                seed = options.getRandomSeed() + i;
-            }
-            execService.execute(new Runnable() {
-
-                @Override
-                public void run() {
-                    Thread.currentThread().setName(databaseName);
-                    runThread(databaseName);
-                }
-
-                private void runThread(final String databaseName) {
-                    Randomly r = new Randomly(seed);
-                    try {
-                        int maxNrDbs = options.getMaxGeneratedDatabases();
-                        // run without a limit if maxNrDbs == -1
-                        for (int i = 0; i < maxNrDbs || maxNrDbs == -1; i++) {
-                            Boolean continueRunning = run(options, execService, executorFactory, r, databaseName);
-                            if (!continueRunning) {
-                                someOneFails.set(true);
-                                break;
-                            }
-                        }
-                    } finally {
-                        threadsShutdown.addAndGet(1);
-                        if (threadsShutdown.get() == options.getTotalNumberTries()) {
-                            execService.shutdown();
-                        }
-                    }
-                }
-
-                private boolean run(MainOptions options, ExecutorService execService,
-                                    DBMSExecutorFactory<?> executorFactory, Randomly r, final String databaseName) {
-                    DBMSExecutor executor = executorFactory.getDBMSExecutor(databaseName, r);
-                    executor.setSeqCounterList(seqCounterList);
-                    try {
-                        executor.run();
-                        return true;
-                    } catch (IgnoreMeException e) {
-                        return true;
-                    } catch (Throwable reduce) {
-                        reduce.printStackTrace();
-                        executor.getStateToReproduce().exception = reduce.getMessage();
-                        executor.getLogger().logFileWriter = null;
-                        executor.getLogger().logException(reduce, executor.getStateToReproduce());
-                        return false;
-                    } finally {
-                        try {
-                            if (options.logEachSelect()) {
-                                if (executor.getLogger().currentFileWriter != null) {
-                                    executor.getLogger().currentFileWriter.close();
-                                }
-                                executor.getLogger().currentFileWriter = null;
-                            }
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                        }
-                    }
-                }
-            });
-        }
+        int submittedTaskCount = submitExecutionTasks(options, execService, executorFactory, postgreSQLOptions,
+                someOneFails, seqCounterList);
         try {
             if (options.getTimeoutSeconds() == -1) {
                 execService.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);
@@ -204,6 +148,235 @@ public final class Main {
         providers.add(new PostgreSQLProvider());
 
         return providers;
+    }
+
+    private static int submitExecutionTasks(MainOptions options, ExecutorService execService,
+                                            DBMSExecutorFactory<?> executorFactory,
+                                            PostgreSQLOptions postgreSQLOptions, AtomicBoolean someOneFails,
+                                            List<Map<Integer, Map<Integer, Integer>>> seqCounterList) {
+        if (postgreSQLOptions != null && postgreSQLOptions.useStress()) {
+            if (postgreSQLOptions.getStressTopology() == PostgreSQLOptions.PostgreSQLStressTopology.SHARED) {
+                return submitSharedStressTasks(options, execService, executorFactory, someOneFails, seqCounterList);
+            }
+            return submitIsolatedStressTasks(options, execService, executorFactory, someOneFails, seqCounterList);
+        }
+        return submitNonStressTasks(options, execService, executorFactory, someOneFails, seqCounterList);
+    }
+
+    private static int submitNonStressTasks(MainOptions options, ExecutorService execService,
+                                            DBMSExecutorFactory<?> executorFactory, AtomicBoolean someOneFails,
+                                            List<Map<Integer, Map<Integer, Integer>>> seqCounterList) {
+        int submittedTaskCount = options.getTotalNumberTries();
+        for (int taskIndex = 0; taskIndex < submittedTaskCount; taskIndex++) {
+            final int workerIndex = taskIndex;
+            execService.execute(() -> {
+                String databaseName = options.getDatabasePrefix() + workerIndex;
+                Thread.currentThread().setName(databaseName);
+                try {
+                    int maxNrDbs = options.getMaxGeneratedDatabases();
+                    for (int round = 0; round < maxNrDbs || maxNrDbs == -1; round++) {
+                        Randomly randomly = new Randomly(resolveSeed(options, workerIndex, round));
+                        DBMSExecutor executor = executorFactory.getDBMSExecutor(databaseName, randomly);
+                        if (!runExecutor(options, executor, seqCounterList)) {
+                            someOneFails.set(true);
+                            break;
+                        }
+                    }
+                } finally {
+                    finishWorker(execService, submittedTaskCount);
+                }
+            });
+        }
+        return submittedTaskCount;
+    }
+
+    private static int submitIsolatedStressTasks(MainOptions options, ExecutorService execService,
+                                                 DBMSExecutorFactory<?> executorFactory, AtomicBoolean someOneFails,
+                                                 List<Map<Integer, Map<Integer, Integer>>> seqCounterList) {
+        int submittedTaskCount = options.getNumberConcurrentThreads();
+        for (int taskIndex = 0; taskIndex < submittedTaskCount; taskIndex++) {
+            final int workerIndex = taskIndex;
+            execService.execute(() -> {
+                String workerName = options.getDatabasePrefix() + workerIndex;
+                Thread.currentThread().setName(workerName);
+                try {
+                    int maxNrDbs = options.getMaxGeneratedDatabases();
+                    for (int round = 0; round < maxNrDbs || maxNrDbs == -1; round++) {
+                        String databaseName = buildIsolatedDatabaseName(options.getDatabasePrefix(), workerIndex, round);
+                        Randomly randomly = new Randomly(resolveSeed(options, workerIndex, round));
+                        DBMSExecutor executor = executorFactory.getDBMSExecutor(databaseName, databaseName, randomly,
+                                true, "");
+                        if (!runExecutor(options, executor, seqCounterList)) {
+                            someOneFails.set(true);
+                            break;
+                        }
+                    }
+                } finally {
+                    finishWorker(execService, submittedTaskCount);
+                }
+            });
+        }
+        return submittedTaskCount;
+    }
+
+    private static int submitSharedStressTasks(MainOptions options, ExecutorService execService,
+                                               DBMSExecutorFactory<?> executorFactory, AtomicBoolean someOneFails,
+                                               List<Map<Integer, Map<Integer, Integer>>> seqCounterList) {
+        int submittedTaskCount = options.getNumberConcurrentThreads();
+        CyclicBarrier prepareBarrier = new CyclicBarrier(submittedTaskCount);
+        CyclicBarrier finishBarrier = new CyclicBarrier(submittedTaskCount);
+        AtomicReference<Throwable> sharedFailure = new AtomicReference<>();
+
+        for (int taskIndex = 0; taskIndex < submittedTaskCount; taskIndex++) {
+            final int workerIndex = taskIndex;
+            execService.execute(() -> {
+                String workerName = options.getDatabasePrefix() + "shared-thread" + workerIndex;
+                Thread.currentThread().setName(workerName);
+                try {
+                    int maxNrDbs = options.getMaxGeneratedDatabases();
+                    for (int round = 0; round < maxNrDbs || maxNrDbs == -1; round++) {
+                        if (sharedFailure.get() != null) {
+                            someOneFails.set(true);
+                            break;
+                        }
+                        String databaseName = options.getDatabasePrefix() + round;
+                        if (workerIndex == 0) {
+                            DBMSExecutor prepareExecutor = executorFactory.getDBMSExecutor(databaseName,
+                                    databaseName + "-prepare", new Randomly(resolveSeed(options, workerIndex, round)),
+                                    true, buildSharedObjectPrefix(workerIndex));
+                            try {
+                                prepareExecutor.prepareDatabase();
+                            } catch (Throwable throwable) {
+                                sharedFailure.compareAndSet(null, throwable);
+                                prepareBarrier.reset();
+                            }
+                        }
+                        if (!awaitBarrier(prepareBarrier, sharedFailure.get())) {
+                            someOneFails.set(true);
+                            break;
+                        }
+                        if (sharedFailure.get() != null) {
+                            someOneFails.set(true);
+                            finishBarrier.reset();
+                            break;
+                        }
+
+                        DBMSExecutor executor = executorFactory.getDBMSExecutor(databaseName,
+                                databaseName + "-thread" + workerIndex,
+                                new Randomly(resolveSeed(options, workerIndex, round)),
+                                false, buildSharedObjectPrefix(workerIndex));
+                        boolean succeeded = runExecutor(options, executor, seqCounterList);
+                        if (!succeeded) {
+                            someOneFails.set(true);
+                            sharedFailure.compareAndSet(null, new AssertionError(
+                                    "Shared stress worker " + workerIndex + " failed on " + databaseName));
+                            finishBarrier.reset();
+                            break;
+                        }
+                        if (!awaitBarrier(finishBarrier, sharedFailure.get())) {
+                            someOneFails.set(true);
+                            break;
+                        }
+                    }
+                } finally {
+                    finishWorker(execService, submittedTaskCount);
+                }
+            });
+        }
+        return submittedTaskCount;
+    }
+
+    private static boolean runExecutor(MainOptions options, DBMSExecutor executor,
+                                       List<Map<Integer, Map<Integer, Integer>>> seqCounterList) {
+        if (shouldUseSequenceCounters(executor)) {
+            executor.setSeqCounterList(seqCounterList);
+        }
+        try {
+            executor.run();
+            return true;
+        } catch (IgnoreMeException e) {
+            return true;
+        } catch (Throwable reduce) {
+            reduce.printStackTrace();
+            if (executor.getStateToReproduce() != null) {
+                executor.getStateToReproduce().exception = reduce.getMessage();
+            }
+            if (executor.getLogger() != null) {
+                executor.getLogger().logFileWriter = null;
+                executor.getLogger().logException(reduce, executor.getStateToReproduce());
+            }
+            return false;
+        } finally {
+            closeCurrentLog(options, executor);
+        }
+    }
+
+    private static void closeCurrentLog(MainOptions options, DBMSExecutor executor) {
+        try {
+            if (options.logEachSelect() && executor.getLogger() != null) {
+                if (executor.getLogger().currentFileWriter != null) {
+                    executor.getLogger().currentFileWriter.close();
+                }
+                executor.getLogger().currentFileWriter = null;
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void finishWorker(ExecutorService execService, int submittedTaskCount) {
+        threadsShutdown.addAndGet(1);
+        if (threadsShutdown.get() == submittedTaskCount) {
+            execService.shutdown();
+        }
+    }
+
+    private static boolean awaitBarrier(CyclicBarrier barrier, Throwable priorFailure) {
+        if (priorFailure != null) {
+            return false;
+        }
+        try {
+            barrier.await();
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (BrokenBarrierException e) {
+            return false;
+        }
+    }
+
+    private static long resolveSeed(MainOptions options, int workerIndex, int round) {
+        long seedBase = options.getRandomSeed() == -1 ? System.currentTimeMillis() : options.getRandomSeed();
+        return seedBase + (workerIndex * 1000L) + round;
+    }
+
+    private static String buildIsolatedDatabaseName(String databasePrefix, int workerIndex, int round) {
+        if (round == 0) {
+            return databasePrefix + workerIndex;
+        }
+        return databasePrefix + workerIndex + "_" + round;
+    }
+
+    private static String buildSharedObjectPrefix(int workerIndex) {
+        return "thr" + workerIndex + "_";
+    }
+
+    private static boolean shouldUseSequenceCounters(DBMSExecutor executor) {
+        if (executor.getCommand() instanceof PostgreSQLOptions) {
+            PostgreSQLOptions options = (PostgreSQLOptions) executor.getCommand();
+            return !options.useStress();
+        }
+        return true;
+    }
+
+    private static void resetRuntimeState() {
+        nrQueries.set(0);
+        nrDatabases.set(0);
+        nrSuccessfulActions.set(0);
+        nrUnsuccessfulActions.set(0);
+        threadsShutdown.set(0);
+        PostgreSQLStressOracle.resetSharedBootstrapTracking();
     }
 
     private static synchronized void startProgressMonitor() {

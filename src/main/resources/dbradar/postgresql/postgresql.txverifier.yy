@@ -1,8 +1,25 @@
 create_table:
-    CREATE TABLE _new_table_name (first_new_column more_new_column*)
+    CREATE TABLE _new_table_name (wide_new_columns)
 
 first_new_column:
     new_column
+
+wide_new_columns:
+    new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
 
 more_new_column:
     , new_column
@@ -17,6 +34,33 @@ type_name:
     | DECIMAL
     | FLOAT
     | REAL
+    | int4range
+    | int4multirange
+    | MONEY
+    | BIT
+    | INET
+    | BYTEA
+    | DATE
+    | TIME
+    | TIMESTAMP
+    | INTERVAL
+    | POINT
+    | BOX
+    | LSEG
+    | PATH
+    | POLYGON
+    | CIRCLE
+    | CIDR
+    | MACADDR
+    | MACADDR8
+    | TSVECTOR
+    | TSQUERY
+    | UUID
+    | XML
+    | JSON
+    | JSONB
+    | PG_LSN
+    | OID
 
 column_constraint:
     default_expr?

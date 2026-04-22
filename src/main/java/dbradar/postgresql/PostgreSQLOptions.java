@@ -11,6 +11,7 @@ import dbradar.GlobalState;
 import dbradar.OracleFactory;
 import dbradar.common.oracle.TestOracle;
 import dbradar.postgresql.oracle.PostgreSQLEDCOracle;
+import dbradar.postgresql.oracle.PostgreSQLStressOracle;
 
 @Parameters(separators = "=", commandDescription = "PostgreSQL (default port: " + PostgreSQLOptions.DEFAULT_PORT
         + ", default host: " + PostgreSQLOptions.DEFAULT_HOST + ")")
@@ -23,6 +24,9 @@ public class PostgreSQLOptions implements DBMSSpecificOptions {
 
     @Parameter(names = "--oracle", description = "Specifies which test oracle should be used for PostgreSQL")
     public List<PostgreSQLOptions.PostgreSQLOracleFactory> oracle = Arrays.asList(PostgreSQLOptions.PostgreSQLOracleFactory.EQUATION);
+
+    @Parameter(names = "--stress-topology", description = "Specifies how PostgreSQL stress mode maps threads to databases")
+    public PostgreSQLOptions.PostgreSQLStressTopology stressTopology = PostgreSQLOptions.PostgreSQLStressTopology.ISOLATED;
 
     @Parameter(names = "--test-collations", description = "Specifies whether to test different collations", arity = 1)
     public boolean testCollations = true;
@@ -41,12 +45,36 @@ public class PostgreSQLOptions implements DBMSSpecificOptions {
                 PostgreSQLGlobalState state = (PostgreSQLGlobalState) globalState;
                 return new PostgreSQLEDCOracle(state);
             }
+        },
+        STRESS {
+            @Override
+            public TestOracle create(GlobalState globalState) throws SQLException {
+                PostgreSQLGlobalState state = (PostgreSQLGlobalState) globalState;
+                return new PostgreSQLStressOracle(state);
+            }
         }
 
     }
 
+    public enum PostgreSQLStressTopology {
+        ISOLATED,
+        SHARED
+    }
+
     public boolean useEquation() {
         return oracle.get(0) == PostgreSQLOracleFactory.EQUATION;
+    }
+
+    public boolean useStress() {
+        return oracle.get(0) == PostgreSQLOracleFactory.STRESS;
+    }
+
+    public boolean useSharedStressTopology() {
+        return useStress() && stressTopology == PostgreSQLStressTopology.SHARED;
+    }
+
+    public PostgreSQLStressTopology getStressTopology() {
+        return stressTopology;
     }
 
     @Override

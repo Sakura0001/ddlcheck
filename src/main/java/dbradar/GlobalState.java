@@ -23,6 +23,7 @@ public abstract class GlobalState {
     private StateToReproduce state;
     private QueryManager manager;
     private String databaseName;
+    private String generatedObjectNamePrefix = "";
     private AbstractSchema<?, ?, ?> schema;
 
     private String grammarPath = null;
@@ -95,6 +96,14 @@ public abstract class GlobalState {
 
     public void setDatabaseName(String databaseName) {
         this.databaseName = databaseName;
+    }
+
+    public String getGeneratedObjectNamePrefix() {
+        return generatedObjectNamePrefix;
+    }
+
+    public void setGeneratedObjectNamePrefix(String generatedObjectNamePrefix) {
+        this.generatedObjectNamePrefix = generatedObjectNamePrefix == null ? "" : generatedObjectNamePrefix;
     }
 
     public AbstractSchema<?, ?, ?> getSchema() {

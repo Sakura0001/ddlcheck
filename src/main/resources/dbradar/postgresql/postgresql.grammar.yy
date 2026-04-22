@@ -1,9 +1,9 @@
 # [CREATE TABLE](https://www.postgresql.org/docs/current/sql-createtable.html)
 create_table:
-    CREATE TABLE if_not_exist? _new_table_name (first_new_column more_new_column* table_constraint*) table_option*
-    | CREATE temporary? TABLE if_not_exist? _new_table_name (first_new_column more_new_column* table_constraint*) table_option*
+    CREATE TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
+    | CREATE temporary? TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
     @disable-oracle write_guard, transaction_verifier
-    | CREATE UNLOGGED? TABLE if_not_exist? _new_table_name (first_new_column more_new_column* table_constraint*) table_option*
+    | CREATE UNLOGGED? TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
 
 create_partitioned_table:
     CREATE TABLE if_not_exist? _new_table_name (partition_key_column partition_payload_column*) PARTITION BY RANGE (partition_key)
@@ -26,6 +26,23 @@ if_not_exist:
 
 first_new_column:
     new_column
+
+wide_new_columns:
+    new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
 
 new_column_more:
     , new_column
@@ -301,9 +318,7 @@ numerical_funcs:
     | xor(numerical_expr)
     | tan(numerical_expr)
     | @(numerical_expr)
-    | date_diff(date_element, date_expr, date_expr)
     | date_part(date_element,date_expr)
-    | date_sub(date_element, date_expr,date_expr)
 
 varchar_expr:
     (expr) {print("::")} VARCHAR
@@ -316,16 +331,13 @@ collate:
     varchar_expr collation
 
 collation:
-    COLLATE NOACCENT
-    | COLLATE NOCASE
-    | COLLATE NOACCENT.NOCASE
-    | COLLATE C
+    COLLATE C
     | COLLATE POSIX
 
 varchar_funcs:
-    strftime(date_expr, {print("'%a, %-d %B %Y'")})
-    | dayname(date_expr)
-    | monthname(date_expr)
+    lower(varchar_expr)
+    | upper(varchar_expr)
+    | initcap(varchar_expr)
 
 date_expr:
     _date
@@ -562,7 +574,6 @@ alter_table_option:
     | NO FORCE ROW LEVEL SECURITY
     | CLUSTER ON _index
     | SET WITHOUT CLUSTER
-    | SET WITHOUT OIDS
     | SET LOGGED
     | SET UNLOGGED
     | OWNER TO CURRENT_USER

@@ -133,6 +133,10 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
             int length = Integer.parseInt(new IntGenerator(1, 10, "").generate(globalState));
             String constraintName = new TextGenerator(length).generate(globalState);
             constraintName = constraintName.substring(1, constraintName.length() - 1);
+            String prefix = globalState.getGeneratedObjectNamePrefix();
+            if (!prefix.isEmpty()) {
+                constraintName = prefix + constraintName;
+            }
             ASTNode tableNode = new ASTNode(new Token(Token.TokenType.TERMINAL, constraintName));
             parent.addChild(tableNode);
         }

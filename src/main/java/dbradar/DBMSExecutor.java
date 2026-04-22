@@ -10,19 +10,26 @@ public class DBMSExecutor {
     private final MainOptions options;
     private final DBMSSpecificOptions command;
     private final String databaseName;
+    private final String logName;
     private StateLogger logger;
     private StateToReproduce stateToRepro;
     private final Randomly r;
+    private final boolean createDatabaseOnRun;
+    private final String generatedObjectNamePrefix;
 
     private List<Map<Integer, Map<Integer, Integer>>> seqCounterList = null;
 
     public DBMSExecutor(DatabaseProvider provider, MainOptions options, DBMSSpecificOptions dbmsSpecificOptions,
-                        String databaseName, Randomly r) {
+                        String databaseName, String logName, Randomly r, boolean createDatabaseOnRun,
+                        String generatedObjectNamePrefix) {
         this.provider = provider;
         this.options = options;
         this.databaseName = databaseName;
+        this.logName = logName;
         this.command = dbmsSpecificOptions;
         this.r = r;
+        this.createDatabaseOnRun = createDatabaseOnRun;
+        this.generatedObjectNamePrefix = generatedObjectNamePrefix == null ? "" : generatedObjectNamePrefix;
     }
 
     private GlobalState createGlobalState() {
@@ -44,17 +51,25 @@ public class DBMSExecutor {
         }
     }
 
+    public void prepareDatabase() throws Exception {
+        GlobalState state = getInitializedGlobalState(r.getSeed());
+        try (DatabaseConnection con = provider.createDatabase(state)) {
+            return;
+        }
+    }
+
     public void run() throws Exception {
         GlobalState state = createGlobalState();
         stateToRepro = provider.getStateToReproduce(databaseName);
         stateToRepro.seedValue = r.getSeed();
         state.setState(stateToRepro);
-        logger = new StateLogger(databaseName, provider, options);
+        logger = new StateLogger(logName, provider, options);
         state.setRandomly(r);
         state.setDatabaseName(databaseName);
+        state.setGeneratedObjectNamePrefix(generatedObjectNamePrefix);
         state.setMainOptions(options);
         state.setDbmsSpecificOptions(command);
-        try (DatabaseConnection con = provider.createDatabase(state)) {
+        try (DatabaseConnection con = createDatabaseOnRun ? provider.createDatabase(state) : provider.createConnection(state)) {
             QueryManager manager = new QueryManager(state);
             try {
                 stateToRepro.databaseVersion = con.getDatabaseVersion();
@@ -89,10 +104,11 @@ public class DBMSExecutor {
         stateToRepro = provider.getStateToReproduce(databaseName);
         stateToRepro.seedValue = seed;
         state.setState(stateToRepro);
-        logger = new StateLogger(databaseName, provider, options);
+        logger = new StateLogger(logName, provider, options);
         Randomly r = new Randomly(seed);
         state.setRandomly(r);
         state.setDatabaseName(databaseName);
+        state.setGeneratedObjectNamePrefix(generatedObjectNamePrefix);
         state.setMainOptions(options);
         state.setDbmsSpecificOptions(command);
         return state;

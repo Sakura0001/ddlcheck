@@ -21,6 +21,8 @@ import java.util.Objects;
 
 public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
 
+    private static final int MIN_BOOTSTRAP_ATTEMPTS = 100;
+
     protected final S genState; // generated DDL sequence
     protected S synState = null; // synthesized DDL sequence
     protected static String databaseName;
@@ -42,10 +44,7 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
             boolean foundBug = false;
             String errorMessage = null;
             try {
-                generateState(ddlSeq);
-                while (genState.getSchema().getDatabaseTables().isEmpty()) {
-                    generateState(ddlSeq);
-                }
+                generateState(ddlSeq, genState.getOptions().getDdlCount());
             } catch (SQLException e) {
                 foundBug = true;
                 errorMessage = e.getMessage();
@@ -60,10 +59,7 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
             }
 
             synthesizeState(); // check the correctness of DDL
-
-            for (int i = 0; i < 10; i++) {
-                checkDMLStmt(); // add initial data
-            }
+            populateBootstrapDml();
 
             init = false;
         }
@@ -73,7 +69,7 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
             try {
                 queryString = generateSelectStmt(genState);
                 if (queryString != null) break;
-            } catch (QueryGenerationException ignored) {
+            } catch (QueryGenerationException | IgnoreMeException ignored) {
             }
         }
 
@@ -109,10 +105,40 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
         ComparatorHelper.assumeResultSetsAreEqual(manualResult, semiResult, queryOnState.getQueryString(), List.of(queryOnSemiState.getQueryString()), state);
     }
 
-    protected void checkDMLStmt() throws SQLException {
+    private void populateBootstrapDml() throws SQLException {
+        int targetSuccessfulDml = genState.getOptions().getDmlCount();
+        int maxAttempts = Math.max(MIN_BOOTSTRAP_ATTEMPTS, targetSuccessfulDml * genState.getOptions().getNrStatementRetryCount());
+        int successfulStatements = populateRequiredBootstrapDml();
+
+        for (int attempts = 0; attempts < maxAttempts && successfulStatements < targetSuccessfulDml; attempts++) {
+            try {
+                if (checkDMLStmt(false)) {
+                    successfulStatements++;
+                }
+            } catch (IgnoreMeException ignored) {
+                // Keep retrying within the bootstrap budget until the requested number of DML statements succeeds.
+            }
+        }
+
+        if (successfulStatements < targetSuccessfulDml) {
+            throw new AssertionError(String.format(
+                    "Expected %d successful bootstrap DML statements but observed %d",
+                    targetSuccessfulDml, successfulStatements));
+        }
+    }
+
+    protected int populateRequiredBootstrapDml() throws SQLException {
+        return 0;
+    }
+
+    protected boolean checkDMLStmt() throws SQLException {
+        return checkDMLStmt(true);
+    }
+
+    protected boolean checkDMLStmt(boolean logExecutionAttempt) throws SQLException {
         SQLQueryAdapter query = generateDMLStmt(genState);
         if (query != null) { // may face generation error
-            boolean success = checkStmt(query.getQueryString());
+            boolean success = checkStmt(query.getQueryString(), logExecutionAttempt);
             if (success) {
                 // validate the table data
                 ASTNode table = query.getQueryAST().getChildByName("_table");
@@ -122,14 +148,25 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
                     checkDQLStmt(new SQLQueryAdapter(checkTableContent));
                 }
             }
+            return success;
         }
+        return false;
     }
 
     protected boolean checkStmt(String stmt) {
+        return checkStmt(stmt, true);
+    }
+
+    protected boolean checkStmt(String stmt, boolean logExecutionAttempt) {
         if (stmt == null) return false;
-        genState.getLogger().writeCurrent(stmt);
+        if (logExecutionAttempt) {
+            genState.getLogger().writeCurrent(stmt);
+        }
         try {
             if (checkStmt(stmt, genState, synState)) {
+                if (!logExecutionAttempt) {
+                    genState.getLogger().writeCurrent(stmt);
+                }
                 genState.getState().logStatement(stmt);
                 Main.nrSuccessfulActions.addAndGet(1);
                 return true;
@@ -168,7 +205,7 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
         }
     }
 
-    public void generateState(List<String> ddlSequence) throws Exception {
+    public void generateState(List<String> ddlSequence, int targetDdlCount) throws Exception {
         throw new RuntimeException("Not implemented yet");
     }
 

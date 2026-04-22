@@ -7,7 +7,9 @@ import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import dbradar.IgnoreMeException;
 import dbradar.Randomly;
@@ -122,18 +124,25 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         private String columnDefault;
         private boolean isNullable;
         private String dataType;
+        private String udtName;
+        private String domainName;
+        private PostgreSQLCustomTypeKind customTypeKind;
         private long characterMaximumLength;
         private int numericPrecision;
         private int numericScale;
 
         public PostgreSQLColumn(String columnName,
-                                String columnDefault, boolean isNullable, String dataType,
+                                String columnDefault, boolean isNullable, String dataType, String udtName,
+                                String domainName, PostgreSQLCustomTypeKind customTypeKind,
                                 long characterMaximumLength, int numericPrecision, int numericScale) {
-            super(columnName, null, getPostgreSQLDataType(dataType));
+            super(columnName, null, getPostgreSQLDataType(dataType, udtName, customTypeKind));
             this.columnName = columnName;
             this.columnDefault = columnDefault;
             this.isNullable = isNullable;
             this.dataType = dataType;
+            this.udtName = udtName;
+            this.domainName = domainName;
+            this.customTypeKind = customTypeKind;
             this.characterMaximumLength = characterMaximumLength;
             this.numericPrecision = numericPrecision;
             this.numericScale = numericScale;
@@ -155,6 +164,18 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
             return dataType;
         }
 
+        public String getUdtName() {
+            return udtName;
+        }
+
+        public String getDomainName() {
+            return domainName;
+        }
+
+        public PostgreSQLCustomTypeKind getCustomTypeKind() {
+            return customTypeKind;
+        }
+
         public long getCharacterMaximumLength() {
             return characterMaximumLength;
         }
@@ -169,7 +190,14 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
     }
 
     public enum PostgreSQLDataType {
-        INT, BOOLEAN, TEXT, DECIMAL, FLOAT, REAL, RANGE, MONEY, BIT, INET;
+        INT, BOOLEAN, TEXT, DECIMAL, FLOAT, REAL, RANGE, MULTIRANGE, MONEY, BIT, INET,
+        BYTEA, DATE, TIME, TIMESTAMP, INTERVAL, POINT, BOX, LSEG, PATH, POLYGON, CIRCLE,
+        CIDR, MACADDR, TSVECTOR, TSQUERY, UUID,
+        XML, JSON, JSONB, PG_LSN, OID, ARRAY, ENUM, COMPOSITE;
+    }
+
+    public enum PostgreSQLCustomTypeKind {
+        ENUM, COMPOSITE
     }
 
     public static class PostgreSQLIndex extends TableIndex {
@@ -314,12 +342,19 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
     public static PostgreSQLSchema fromConnection(SQLConnection con, String databaseName) throws SQLException {
         try {
             List<PostgreSQLTable> databaseTables = new ArrayList<>();
+            Map<String, PostgreSQLCustomTypeKind> customTypeKinds = getCustomTypeKinds(con);
             try (Statement s = con.createStatement()) {
                 try (ResultSet rs = s.executeQuery(
                         "SELECT t.table_name,\n" +
                                 "       t.table_schema,\n" +
                                 "       t.table_type,\n" +
                                 "       t.is_insertable_into,\n" +
+                                "       EXISTS (\n" +
+                                "           SELECT 1\n" +
+                                "           FROM information_schema.views v\n" +
+                                "           WHERE v.table_schema = t.table_schema\n" +
+                                "             AND v.table_name = t.table_name\n" +
+                                "       ) AS is_view,\n" +
                                 "       c.relkind,\n" +
                                 "       c.relispartition,\n" +
                                 "       parent.relname AS partition_parent_name,\n" +
@@ -336,20 +371,26 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
                         String tableName = rs.getString("table_name");
                         String tableTypeSchema = rs.getString("table_schema");
                         boolean isInsertable = rs.getBoolean("is_insertable_into");
+                        boolean isView = rs.getBoolean("is_view");
                         boolean isPartition = rs.getBoolean("relispartition");
                         boolean isPartitionedTable = "p".equals(rs.getString("relkind"));
                         String partitionParentName = rs.getString("partition_parent_name");
                         String partitionKeyDefinition = rs.getString("partition_key_definition");
                         String partitionBound = rs.getString("partition_bound");
-                        // TODO: also check insertable
-                        // TODO: insert into view?
-                        boolean isView = tableName.startsWith("v"); // tableTypeStr.contains("VIEW") ||
-                        // tableTypeStr.contains("LOCAL TEMPORARY") &&
-                        // !isInsertable;
                         PostgreSQLTable.TableType tableType = getTableType(tableTypeSchema);
-                        List<PostgreSQLColumn> columns = getTableColumns(con, tableName);
-                        List<PostgreSQLIndex> indexes = getIndexes(con, tableName);
-                        List<PostgreSQLStatisticsObject> statistics = getStatistics(con);
+                        List<PostgreSQLColumn> columns;
+                        List<PostgreSQLIndex> indexes;
+                        List<PostgreSQLStatisticsObject> statistics;
+                        try {
+                            columns = getTableColumns(con, tableName, customTypeKinds);
+                            indexes = getIndexes(con, tableName);
+                            statistics = getStatistics(con);
+                        } catch (SQLException e) {
+                            if (isTransientSchemaLookupFailure(e)) {
+                                continue;
+                            }
+                            throw e;
+                        }
                         PostgreSQLTable table = new PostgreSQLTable(tableName, columns, indexes, tableType, statistics,
                                 isView, isInsertable, isPartitionedTable, isPartition, partitionParentName,
                                 partitionKeyDefinition, partitionBound);
@@ -362,6 +403,10 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
                                 for (PostgreSQLColumn column : columns) {
                                     if (columnName.equals(column.getName())) {
                                         index.getColumns().add(column);
+                                        if (index.isPrimaryKey()) {
+                                            column.setPrimaryKey(true);
+                                            column.setNotNull(true);
+                                        }
                                         break;
                                     }
                                 }
@@ -379,6 +424,38 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         } catch (SQLIntegrityConstraintViolationException e) {
             throw new AssertionError(e);
         }
+    }
+
+    private static boolean isTransientSchemaLookupFailure(SQLException e) {
+        String message = e.getMessage();
+        if (message == null) {
+            return false;
+        }
+        return message.contains("could not open relation with OID")
+                || message.contains("cache lookup failed for relation")
+                || message.contains("does not exist");
+    }
+
+    protected static Map<String, PostgreSQLCustomTypeKind> getCustomTypeKinds(SQLConnection con) throws SQLException {
+        Map<String, PostgreSQLCustomTypeKind> customTypeKinds = new HashMap<>();
+        String query = "SELECT t.typname, t.typtype, c.relkind "
+                + "FROM pg_type t "
+                + "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                + "LEFT JOIN pg_class c ON c.oid = t.typrelid "
+                + "WHERE n.nspname = 'public'";
+        try (Statement s = con.createStatement(); ResultSet rs = s.executeQuery(query)) {
+            while (rs.next()) {
+                String typeName = rs.getString("typname");
+                String typeKind = rs.getString("typtype");
+                String relationKind = rs.getString("relkind");
+                if ("e".equals(typeKind)) {
+                    customTypeKinds.put(typeName, PostgreSQLCustomTypeKind.ENUM);
+                } else if ("c".equals(typeKind) && "c".equals(relationKind)) {
+                    customTypeKinds.put(typeName, PostgreSQLCustomTypeKind.COMPOSITE);
+                }
+            }
+        }
+        return customTypeKinds;
     }
 
     protected static List<PostgreSQLStatisticsObject> getStatistics(SQLConnection con) throws SQLException {
@@ -447,22 +524,31 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         return indexes;
     }
 
-    protected static List<PostgreSQLColumn> getTableColumns(SQLConnection con, String tableName) throws SQLException {
+    protected static List<PostgreSQLColumn> getTableColumns(SQLConnection con, String tableName,
+            Map<String, PostgreSQLCustomTypeKind> customTypeKinds) throws SQLException {
         List<PostgreSQLColumn> columns = new ArrayList<>();
         try (Statement s = con.createStatement()) {
             try (ResultSet rs = s
                     .executeQuery("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name = '"
-                            + tableName + "' ORDER BY column_name")) {
+                            + tableName + "' ORDER BY ordinal_position")) {
                 while (rs.next()) {
+                    String udtName = rs.getString("UDT_NAME");
+                    String domainName = rs.getString("DOMAIN_NAME");
+                    PostgreSQLCustomTypeKind customTypeKind = udtName == null ? null : customTypeKinds.get(udtName);
                     PostgreSQLColumn column = new PostgreSQLColumn(
                             rs.getString("COLUMN_NAME"),
                             rs.getString("COLUMN_DEFAULT"),
                             "YES".equals(rs.getString("IS_NULLABLE")),
                             rs.getString("DATA_TYPE"),
+                            udtName,
+                            domainName,
+                            customTypeKind,
                             rs.getLong("CHARACTER_MAXIMUM_LENGTH"),
                             rs.getInt("NUMERIC_PRECISION"),
                             rs.getInt("NUMERIC_SCALE")
                     );
+                    column.setGenerated("ALWAYS".equals(rs.getString("IS_GENERATED")));
+                    column.setNotNull("NO".equals(rs.getString("IS_NULLABLE")));
                     columns.add(column);
                 }
             }
@@ -470,7 +556,8 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         return columns;
     }
 
-    public static PostgreSQLDataType getPostgreSQLDataType(String typeString) {
+    public static PostgreSQLDataType getPostgreSQLDataType(String typeString, String udtName,
+            PostgreSQLCustomTypeKind customTypeKind) {
         switch (typeString) {
             case "smallint":
             case "integer":
@@ -490,8 +577,57 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
                 return PostgreSQLDataType.FLOAT;
             case "real":
                 return PostgreSQLDataType.REAL;
+            case "bytea":
+                return PostgreSQLDataType.BYTEA;
+            case "date":
+                return PostgreSQLDataType.DATE;
+            case "time without time zone":
+            case "time with time zone":
+                return PostgreSQLDataType.TIME;
+            case "timestamp without time zone":
+            case "timestamp with time zone":
+                return PostgreSQLDataType.TIMESTAMP;
+            case "interval":
+                return PostgreSQLDataType.INTERVAL;
+            case "uuid":
+                return PostgreSQLDataType.UUID;
+            case "json":
+                return PostgreSQLDataType.JSON;
+            case "jsonb":
+                return PostgreSQLDataType.JSONB;
+            case "xml":
+                return PostgreSQLDataType.XML;
+            case "point":
+                return PostgreSQLDataType.POINT;
+            case "box":
+                return PostgreSQLDataType.BOX;
+            case "lseg":
+                return PostgreSQLDataType.LSEG;
+            case "path":
+                return PostgreSQLDataType.PATH;
+            case "polygon":
+                return PostgreSQLDataType.POLYGON;
+            case "circle":
+                return PostgreSQLDataType.CIRCLE;
+            case "cidr":
+                return PostgreSQLDataType.CIDR;
+            case "macaddr":
+            case "macaddr8":
+                return PostgreSQLDataType.MACADDR;
+            case "tsvector":
+                return PostgreSQLDataType.TSVECTOR;
+            case "tsquery":
+                return PostgreSQLDataType.TSQUERY;
+            case "pg_lsn":
+                return PostgreSQLDataType.PG_LSN;
+            case "oid":
+                return PostgreSQLDataType.OID;
+            case "ARRAY":
+                return PostgreSQLDataType.ARRAY;
             case "int4range":
                 return PostgreSQLDataType.RANGE;
+            case "int4multirange":
+                return PostgreSQLDataType.MULTIRANGE;
             case "money":
                 return PostgreSQLDataType.MONEY;
             case "bit":
@@ -499,6 +635,20 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
                 return PostgreSQLDataType.BIT;
             case "inet":
                 return PostgreSQLDataType.INET;
+            case "USER-DEFINED":
+                if (customTypeKind == PostgreSQLCustomTypeKind.ENUM) {
+                    return PostgreSQLDataType.ENUM;
+                }
+                if (customTypeKind == PostgreSQLCustomTypeKind.COMPOSITE) {
+                    return PostgreSQLDataType.COMPOSITE;
+                }
+                if (udtName != null && udtName.endsWith("multirange")) {
+                    return PostgreSQLDataType.MULTIRANGE;
+                }
+                if (udtName != null && udtName.endsWith("range")) {
+                    return PostgreSQLDataType.RANGE;
+                }
+                return PostgreSQLDataType.TEXT;
             default:
                 throw new AssertionError(typeString);
         }
