@@ -2,6 +2,7 @@ package dbradar.postgresql;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import dbradar.IgnoreMeException;
@@ -12,6 +13,8 @@ import dbradar.common.query.generator.ASTNode;
 import dbradar.common.query.generator.KeyFunc;
 import dbradar.common.query.generator.KeyFuncManager;
 import dbradar.common.query.generator.QueryGenerationException;
+import dbradar.common.query.generator.data.Generator;
+import dbradar.common.query.generator.data.GeneratorRegister;
 import dbradar.common.query.generator.data.IntGenerator;
 import dbradar.common.query.generator.data.TextGenerator;
 import dbradar.common.schema.AbstractTable;
@@ -32,9 +35,14 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
         keyFuncMap.put(NewConstraintNameKeyFunc.KEY, new NewConstraintNameKeyFunc());
         keyFuncMap.put(NotPKColumnKeyFunc.KEY, new NotPKColumnKeyFunc());
         keyFuncMap.put(PartitionedTableWithoutDefaultKeyFunc.KEY, new PartitionedTableWithoutDefaultKeyFunc());
+        keyFuncMap.put(PartitionedTableForNewPartitionKeyFunc.KEY, new PartitionedTableForNewPartitionKeyFunc());
         keyFuncMap.put(PartitionedTableWithPartitionsKeyFunc.KEY, new PartitionedTableWithPartitionsKeyFunc());
         keyFuncMap.put(PartitionOfSelectedTableKeyFunc.KEY, new PartitionOfSelectedTableKeyFunc());
         keyFuncMap.put(DetachedPartitionCandidateKeyFunc.KEY, new DetachedPartitionCandidateKeyFunc());
+        keyFuncMap.put(NewPartitionBoundKeyFunc.KEY, new NewPartitionBoundKeyFunc());
+        keyFuncMap.put(InsertTargetTableKeyFunc.KEY, new InsertTargetTableKeyFunc());
+        keyFuncMap.put(UpdatableTableKeyFunc.KEY, new UpdatableTableKeyFunc());
+        keyFuncMap.put(PartitionAwareInsertValueKeyFunc.KEY, new PartitionAwareInsertValueKeyFunc());
     }
 
 
@@ -201,6 +209,23 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
         }
     }
 
+    private class PartitionedTableForNewPartitionKeyFunc implements KeyFunc {
+        public static final String KEY = "_partitioned_table_for_new_partition";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLSchema schema = (PostgreSQLSchema) globalState.getSchema();
+            PostgreSQLTable table;
+            try {
+                table = schema.getRandomPartitionedTableForPartitionCreation();
+            } catch (IgnoreMeException ignored) {
+                throw new QueryGenerationException("There is no partitioned table that can accept an additional partition.");
+            }
+            rememberSelectedPartitionedTable(table);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, table.getName())));
+        }
+    }
+
     private class PartitionOfSelectedTableKeyFunc implements KeyFunc {
         public static final String KEY = "_partition_of_selected_table";
 
@@ -235,6 +260,92 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
         }
     }
 
+    private class NewPartitionBoundKeyFunc implements KeyFunc {
+        public static final String KEY = "_new_partition_bound";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLSchema schema = (PostgreSQLSchema) globalState.getSchema();
+            PostgreSQLTable selectedParent = getSelectedPartitionedTable();
+            String partitionBound;
+            try {
+                partitionBound = schema.generateNewPartitionBound(selectedParent);
+            } catch (IgnoreMeException ignored) {
+                throw new QueryGenerationException("Unable to generate a valid partition bound.");
+            }
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, partitionBound)));
+        }
+    }
+
+    private class InsertTargetTableKeyFunc implements KeyFunc {
+        public static final String KEY = "_insert_target_table";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLSchema schema = (PostgreSQLSchema) globalState.getSchema();
+            PostgreSQLTable table;
+            try {
+                table = schema.getRandomInsertTargetTable();
+            } catch (IgnoreMeException ignored) {
+                throw new QueryGenerationException("There is no available insert target table.");
+            }
+            rememberSelectedTable(table);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, table.getName())));
+        }
+    }
+
+    private class UpdatableTableKeyFunc implements KeyFunc {
+        public static final String KEY = "_updatable_table";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLSchema schema = (PostgreSQLSchema) globalState.getSchema();
+            PostgreSQLTable table;
+            try {
+                table = schema.getRandomUpdatableTable();
+            } catch (IgnoreMeException ignored) {
+                throw new QueryGenerationException("There is no available updatable table.");
+            }
+            rememberSelectedTable(table);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, table.getName())));
+        }
+    }
+
+    private class PartitionAwareInsertValueKeyFunc implements KeyFunc {
+        public static final String KEY = "_insert_values";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            Map<String, String> partitionValues = Map.of();
+            PostgreSQLTable selectedTable = getSelectedTableOrNull();
+            if (selectedTable != null && selectedTable.isPartitionedTable()) {
+                try {
+                    partitionValues = ((PostgreSQLSchema) globalState.getSchema()).generatePartitionInsertValues(selectedTable);
+                } catch (IgnoreMeException ignored) {
+                    throw new QueryGenerationException("Unable to generate insert values for a partitioned table.");
+                }
+            }
+
+            int colSize = currentContext.getReturnedColumns().size();
+            for (int i = 0; i < colSize; i++) {
+                AbstractTableColumn<?, ?> col = currentContext.getReturnedColumns().poll();
+                String value = partitionValues.get(col.getName());
+                if (value == null) {
+                    Generator generator = GeneratorRegister.getGenerator(col, globalState);
+                    value = generator.generate(globalState);
+                    while (col.isNotNull() && value.equals("null")) {
+                        value = generator.generate(globalState);
+                    }
+                }
+                ASTNode valueNode = new ASTNode(new Token(Token.TokenType.TERMINAL, value));
+                parent.addChild(valueNode);
+                if (i != colSize - 1) {
+                    parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, ",")));
+                }
+            }
+        }
+    }
+
     private PostgreSQLTable getSelectedPartitionedTable() {
         Object selectedParent = currentContext.getProperty(SELECTED_PARTITION_PARENT);
         if (!(selectedParent instanceof PostgreSQLTable)) {
@@ -244,10 +355,25 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
     }
 
     private void rememberSelectedPartitionedTable(PostgreSQLTable table) {
+        rememberSelectedTable(table);
         currentContext.setProperty(SELECTED_PARTITION_PARENT, table);
+    }
+
+    private void rememberSelectedTable(PostgreSQLTable table) {
         currentContext.addSelectedTable(table);
         currentContext.getCurrentColumns().clear();
         currentContext.getCurrentColumns().addAll(table.getColumns());
+    }
+
+    private PostgreSQLTable getSelectedTableOrNull() {
+        if (currentContext.getSelectedTables().isEmpty()) {
+            return null;
+        }
+        AbstractTable<?, ?, ?> table = currentContext.getSelectedTables().get(0);
+        if (table instanceof PostgreSQLTable) {
+            return (PostgreSQLTable) table;
+        }
+        return null;
     }
 
 }

@@ -6,16 +6,23 @@ create_table:
     | CREATE UNLOGGED? TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
 
 create_partitioned_table:
-    CREATE TABLE if_not_exist? _new_table_name (partition_key_column partition_payload_column*) PARTITION BY RANGE (partition_key)
+    CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY RANGE (partition_key1)
+    | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_key2_column partition_payload_column*) PARTITION BY RANGE (partition_key1, partition_key2)
+    | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY LIST (partition_key1)
+    | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY HASH (partition_key1)
+    | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_key2_column partition_payload_column*) PARTITION BY HASH (partition_key1, partition_key2)
 
-partition_key_column:
-    partition_key INT NOT NULL
+partition_key1_column:
+    partition_key1 INT NOT NULL
+
+partition_key2_column:
+    , partition_key2 INT NOT NULL
 
 partition_payload_column:
     , _new_column_name type_name
 
 create_table_partition:
-    CREATE TABLE if_not_exist? _new_table_name PARTITION OF _partitioned_table_without_default DEFAULT
+    CREATE TABLE if_not_exist? _new_table_name PARTITION OF _partitioned_table_for_new_partition _new_partition_bound
 
 temporary:
     TEMP
@@ -612,8 +619,8 @@ action_more:
 
 # INSERT
 insert:
-    INSERT INTO _table (_insert_columns) overriding_value? VALUES (_insert_values)
-    | INSERT INTO _table (_insert_columns) VALUES (_insert_values)
+    INSERT INTO _insert_target_table (_insert_columns) overriding_value? VALUES (_insert_values)
+    | INSERT INTO _insert_target_table (_insert_columns) VALUES (_insert_values)
 
 overriding_value:
     OVERRIDING SYSTEM VALUE
@@ -621,7 +628,7 @@ overriding_value:
 
 # UPDATE
 update:
-    UPDATE ONLY? _table SET assignment assignment_more* where_clause?
+    UPDATE ONLY? _updatable_table SET assignment assignment_more* where_clause?
 
 assignment:
     _distinct_column = _value

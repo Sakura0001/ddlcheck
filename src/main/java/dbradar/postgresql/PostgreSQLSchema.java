@@ -36,7 +36,7 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         }
 
         public enum PartitionStrategy {
-            NONE, RANGE
+            NONE, RANGE, LIST, HASH
         }
 
         private final TableType tableType;
@@ -47,6 +47,7 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         private final String partitionParentName;
         private final PartitionStrategy partitionStrategy;
         private final String partitionKeyDefinition;
+        private final List<String> partitionKeyColumns;
         private final String partitionBound;
 
         public PostgreSQLTable(String tableName, List<PostgreSQLColumn> columns, List<PostgreSQLIndex> indexes,
@@ -61,6 +62,7 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
             this.partition = partition;
             this.partitionParentName = partitionParentName;
             this.partitionKeyDefinition = partitionKeyDefinition;
+            this.partitionKeyColumns = PostgreSQLPartitionSupport.parsePartitionKeyColumns(partitionKeyDefinition);
             this.partitionBound = partitionBound;
             this.partitionStrategy = parsePartitionStrategy(partitionKeyDefinition);
         }
@@ -101,8 +103,20 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
             return partitionKeyDefinition;
         }
 
+        public List<String> getPartitionKeyColumns() {
+            return partitionKeyColumns;
+        }
+
+        public int getPartitionKeyArity() {
+            return partitionKeyColumns.size();
+        }
+
         public String getPartitionBound() {
             return partitionBound;
+        }
+
+        public boolean isDefaultPartition() {
+            return "DEFAULT".equalsIgnoreCase(partitionBound);
         }
 
         private static PartitionStrategy parsePartitionStrategy(String partitionKeyDefinition) {
@@ -112,6 +126,12 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
             String normalized = partitionKeyDefinition.toUpperCase();
             if (normalized.startsWith("RANGE ")) {
                 return PartitionStrategy.RANGE;
+            }
+            if (normalized.startsWith("LIST ")) {
+                return PartitionStrategy.LIST;
+            }
+            if (normalized.startsWith("HASH ")) {
+                return PartitionStrategy.HASH;
             }
             return PartitionStrategy.NONE;
         }
@@ -254,13 +274,30 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
 
     public PostgreSQLTable getRandomPartitionedTableWithoutDefaultPartition() {
         return getRandomTable(t -> t.isPartitionedTable()
-                && t.getPartitionStrategy() == PostgreSQLTable.PartitionStrategy.RANGE
+                && PostgreSQLPartitionSupport.supportsDefaultPartition(t)
                 && !hasDefaultPartition(t));
+    }
+
+    public PostgreSQLTable getRandomPartitionedTableForPartitionCreation() {
+        return getRandomTable(t -> t.isPartitionedTable()
+                && PostgreSQLPartitionSupport.canCreateAdditionalPartition(this, t));
     }
 
     public PostgreSQLTable getRandomPartitionedTableWithPartitions() {
         return getRandomTable(t -> t.isPartitionedTable()
                 && !getPartitions(t).isEmpty());
+    }
+
+    public PostgreSQLTable getRandomInsertTargetTable() {
+        return getRandomTable(t -> !t.isView()
+                && !t.isPartition()
+                && (!t.isPartitionedTable() || PostgreSQLPartitionSupport.hasUsableInsertRoute(this, t)));
+    }
+
+    public PostgreSQLTable getRandomUpdatableTable() {
+        return getRandomTable(t -> !t.isView()
+                && !t.isPartition()
+                && !t.isPartitionedTable());
     }
 
     public PostgreSQLTable getRandomPartitionOf(PostgreSQLTable parent) {
@@ -291,11 +328,19 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
 
     public boolean hasDefaultPartition(PostgreSQLTable parent) {
         for (PostgreSQLTable partition : getPartitions(parent)) {
-            if ("DEFAULT".equalsIgnoreCase(partition.getPartitionBound())) {
+            if (partition.isDefaultPartition()) {
                 return true;
             }
         }
         return false;
+    }
+
+    public String generateNewPartitionBound(PostgreSQLTable parent) {
+        return PostgreSQLPartitionSupport.createPartitionBound(this, parent);
+    }
+
+    public Map<String, String> generatePartitionInsertValues(PostgreSQLTable parent) {
+        return PostgreSQLPartitionSupport.generateInsertValues(this, parent);
     }
 
     private boolean hasMatchingTableDefinition(PostgreSQLTable first, PostgreSQLTable second) {
