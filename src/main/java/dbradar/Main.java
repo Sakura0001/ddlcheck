@@ -19,11 +19,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.JCommander.Builder;
-import dbradar.cockroachdb.CockroachDBProvider;
-import dbradar.mysql.MySQLProvider;
 import dbradar.postgresql.PostgreSQLProvider;
-import dbradar.sqlite3.SQLite3Provider;
-import dbradar.tidb.TiDBProvider;
 
 public final class Main {
 
@@ -205,11 +201,7 @@ public final class Main {
      */
     static List<DatabaseProvider> getDBMSProviders() {
         List<DatabaseProvider> providers = new ArrayList<>();
-        providers.add(new CockroachDBProvider());
-        providers.add(new MySQLProvider());
         providers.add(new PostgreSQLProvider());
-        providers.add(new SQLite3Provider());
-        providers.add(new TiDBProvider());
 
         return providers;
     }

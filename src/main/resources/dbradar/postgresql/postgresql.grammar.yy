@@ -5,6 +5,18 @@ create_table:
     @disable-oracle write_guard, transaction_verifier
     | CREATE UNLOGGED? TABLE if_not_exist? _new_table_name (first_new_column more_new_column* table_constraint*) table_option*
 
+create_partitioned_table:
+    CREATE TABLE if_not_exist? _new_table_name (partition_key_column partition_payload_column*) PARTITION BY RANGE (partition_key)
+
+partition_key_column:
+    partition_key INT NOT NULL
+
+partition_payload_column:
+    , _new_column_name type_name
+
+create_table_partition:
+    CREATE TABLE if_not_exist? _new_table_name PARTITION OF _partitioned_table_without_default DEFAULT
+
 temporary:
     TEMP
     | TEMPORARY
@@ -475,6 +487,12 @@ drop_view:
 alter_table:
     ALTER TABLE ONLY? _table action action_more*
 
+alter_table_attach_partition:
+    ALTER TABLE _partitioned_table_without_default ATTACH PARTITION _detached_partition_candidate DEFAULT
+
+alter_table_detach_partition:
+    ALTER TABLE _partitioned_table_with_partitions DETACH PARTITION _partition_of_selected_table
+
 action:
     alter_table_add_column
     | alter_table_drop_column
@@ -867,7 +885,7 @@ order_by_option:
     ORDER BY _column order_option?     @disable-symbol compound_op
 
 limit_option:
-    @disable-query {\bLIMIT\b.*\b(?:IN|ALL|ANY|SOME)\b}  # MySQL 8.3.0 doesn't yet support 'LIMIT & IN/ALL/ANY/SOME subquery'
+    @disable-query {\bLIMIT\b.*\b(?:IN|ALL|ANY|SOME)\b}
     LIMIT _int32_unsigned offset?
 
 simple_select_without_temp:

@@ -33,16 +33,34 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
             STANDARD, TEMPORARY
         }
 
+        public enum PartitionStrategy {
+            NONE, RANGE
+        }
+
         private final TableType tableType;
         private final List<PostgreSQLStatisticsObject> statistics;
         private final boolean isInsertable;
+        private final boolean partitionedTable;
+        private final boolean partition;
+        private final String partitionParentName;
+        private final PartitionStrategy partitionStrategy;
+        private final String partitionKeyDefinition;
+        private final String partitionBound;
 
         public PostgreSQLTable(String tableName, List<PostgreSQLColumn> columns, List<PostgreSQLIndex> indexes,
-                               TableType tableType, List<PostgreSQLStatisticsObject> statistics, boolean isView, boolean isInsertable) {
+                               TableType tableType, List<PostgreSQLStatisticsObject> statistics, boolean isView,
+                               boolean isInsertable, boolean partitionedTable, boolean partition,
+                               String partitionParentName, String partitionKeyDefinition, String partitionBound) {
             super(tableName, columns, indexes, false, isView);
             this.statistics = statistics;
             this.isInsertable = isInsertable;
             this.tableType = tableType;
+            this.partitionedTable = partitionedTable;
+            this.partition = partition;
+            this.partitionParentName = partitionParentName;
+            this.partitionKeyDefinition = partitionKeyDefinition;
+            this.partitionBound = partitionBound;
+            this.partitionStrategy = parsePartitionStrategy(partitionKeyDefinition);
         }
 
         public List<PostgreSQLStatisticsObject> getStatistics() {
@@ -59,6 +77,41 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
 
         public boolean isTemporary() {
             return tableType == TableType.TEMPORARY;
+        }
+
+        public boolean isPartitionedTable() {
+            return partitionedTable;
+        }
+
+        public boolean isPartition() {
+            return partition;
+        }
+
+        public String getPartitionParentName() {
+            return partitionParentName;
+        }
+
+        public PartitionStrategy getPartitionStrategy() {
+            return partitionStrategy;
+        }
+
+        public String getPartitionKeyDefinition() {
+            return partitionKeyDefinition;
+        }
+
+        public String getPartitionBound() {
+            return partitionBound;
+        }
+
+        private static PartitionStrategy parsePartitionStrategy(String partitionKeyDefinition) {
+            if (partitionKeyDefinition == null) {
+                return PartitionStrategy.NONE;
+            }
+            String normalized = partitionKeyDefinition.toUpperCase();
+            if (normalized.startsWith("RANGE ")) {
+                return PartitionStrategy.RANGE;
+            }
+            return PartitionStrategy.NONE;
         }
 
     }
@@ -171,6 +224,74 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         }
     }
 
+    public PostgreSQLTable getRandomPartitionedTableWithoutDefaultPartition() {
+        return getRandomTable(t -> t.isPartitionedTable()
+                && t.getPartitionStrategy() == PostgreSQLTable.PartitionStrategy.RANGE
+                && !hasDefaultPartition(t));
+    }
+
+    public PostgreSQLTable getRandomPartitionedTableWithPartitions() {
+        return getRandomTable(t -> t.isPartitionedTable()
+                && !getPartitions(t).isEmpty());
+    }
+
+    public PostgreSQLTable getRandomPartitionOf(PostgreSQLTable parent) {
+        List<PostgreSQLTable> partitions = getPartitions(parent);
+        if (partitions.isEmpty()) {
+            throw new IgnoreMeException();
+        }
+        return Randomly.fromList(partitions);
+    }
+
+    public PostgreSQLTable getRandomDetachedPartitionCandidate(PostgreSQLTable parent) {
+        return getRandomTable(t -> !t.isView()
+                && !t.isPartition()
+                && !t.isPartitionedTable()
+                && !t.getName().equals(parent.getName())
+                && hasMatchingTableDefinition(parent, t));
+    }
+
+    public List<PostgreSQLTable> getPartitions(PostgreSQLTable parent) {
+        List<PostgreSQLTable> partitions = new ArrayList<>();
+        for (PostgreSQLTable table : getDatabaseTables()) {
+            if (table.isPartition() && parent.getName().equals(table.getPartitionParentName())) {
+                partitions.add(table);
+            }
+        }
+        return partitions;
+    }
+
+    public boolean hasDefaultPartition(PostgreSQLTable parent) {
+        for (PostgreSQLTable partition : getPartitions(parent)) {
+            if ("DEFAULT".equalsIgnoreCase(partition.getPartitionBound())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasMatchingTableDefinition(PostgreSQLTable first, PostgreSQLTable second) {
+        List<PostgreSQLColumn> firstColumns = first.getColumns();
+        List<PostgreSQLColumn> secondColumns = second.getColumns();
+        if (firstColumns.size() != secondColumns.size()) {
+            return false;
+        }
+        for (int i = 0; i < firstColumns.size(); i++) {
+            PostgreSQLColumn left = firstColumns.get(i);
+            PostgreSQLColumn right = secondColumns.get(i);
+            if (!left.getName().equals(right.getName())) {
+                return false;
+            }
+            if (!left.getDataType().equals(right.getDataType())) {
+                return false;
+            }
+            if (left.isNullable() != right.isNullable()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public static class PostgreSQLTrigger extends AbstractTrigger {
 
         public PostgreSQLTrigger(String name) {
@@ -195,11 +316,31 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
             List<PostgreSQLTable> databaseTables = new ArrayList<>();
             try (Statement s = con.createStatement()) {
                 try (ResultSet rs = s.executeQuery(
-                        "SELECT table_name, table_schema, table_type, is_insertable_into FROM information_schema.tables WHERE table_schema='public' OR table_schema LIKE 'pg_temp_%' ORDER BY table_name;")) {
+                        "SELECT t.table_name,\n" +
+                                "       t.table_schema,\n" +
+                                "       t.table_type,\n" +
+                                "       t.is_insertable_into,\n" +
+                                "       c.relkind,\n" +
+                                "       c.relispartition,\n" +
+                                "       parent.relname AS partition_parent_name,\n" +
+                                "       pg_get_partkeydef(c.oid) AS partition_key_definition,\n" +
+                                "       pg_get_expr(c.relpartbound, c.oid) AS partition_bound\n" +
+                                "FROM information_schema.tables t\n" +
+                                "JOIN pg_namespace n ON n.nspname = t.table_schema\n" +
+                                "JOIN pg_class c ON c.relname = t.table_name AND c.relnamespace = n.oid\n" +
+                                "LEFT JOIN pg_inherits i ON i.inhrelid = c.oid\n" +
+                                "LEFT JOIN pg_class parent ON parent.oid = i.inhparent\n" +
+                                "WHERE t.table_schema='public' OR t.table_schema LIKE 'pg_temp_%'\n" +
+                                "ORDER BY t.table_name;")) {
                     while (rs.next()) {
                         String tableName = rs.getString("table_name");
                         String tableTypeSchema = rs.getString("table_schema");
                         boolean isInsertable = rs.getBoolean("is_insertable_into");
+                        boolean isPartition = rs.getBoolean("relispartition");
+                        boolean isPartitionedTable = "p".equals(rs.getString("relkind"));
+                        String partitionParentName = rs.getString("partition_parent_name");
+                        String partitionKeyDefinition = rs.getString("partition_key_definition");
+                        String partitionBound = rs.getString("partition_bound");
                         // TODO: also check insertable
                         // TODO: insert into view?
                         boolean isView = tableName.startsWith("v"); // tableTypeStr.contains("VIEW") ||
@@ -210,7 +351,8 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
                         List<PostgreSQLIndex> indexes = getIndexes(con, tableName);
                         List<PostgreSQLStatisticsObject> statistics = getStatistics(con);
                         PostgreSQLTable table = new PostgreSQLTable(tableName, columns, indexes, tableType, statistics,
-                                isView, isInsertable);
+                                isView, isInsertable, isPartitionedTable, isPartition, partitionParentName,
+                                partitionKeyDefinition, partitionBound);
                         for (PostgreSQLColumn c : columns) {
                             c.setTable(table);
                         }
@@ -283,7 +425,7 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
                             "         JOIN pg_class i ON i.oid = idx.indexrelid\n" +
                             "WHERE n.nspname = 'public'\n" +
                             "  AND c.relname = '%s'\n" +
-                            "  AND i.relkind = 'i' -- 确保是索引对象\n" +
+                            "  AND i.relkind IN ('i', 'I') -- 普通索引或分区索引\n" +
                             "ORDER BY c.relname, i.relname;", tableName))) {
                 while (rs.next()) {
                     String indexName = rs.getString("indexname");

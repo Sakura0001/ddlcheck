@@ -15,14 +15,14 @@ public class TestPostgreSQLEDCOracle extends TestEDCOracleBase<PostgreSQLGlobalS
 
     String dbName = "postgresql";
     String host = "127.0.0.1";
-    int port = 14003;
+    int port = 5432;
     String username = "postgres";
-    String password = "postgres";
+    String password = "Taurus_123";
 
     @Test
     public void testPostgreSQLEquationOracle() {
-        assertEquals(0, Main.executeMain("--num-threads", "1",
-                "--num-tries", "100000", "--num-queries", "5000", "--max-generated-databases", "1",
+        assertEquals(0, Main.executeMain("--num-threads", "10",
+                "--num-tries", "100000", "--num-queries", "5000", "--max-generated-databases", "100",
                 "--host", host, "--port", String.valueOf(port), "--username", username, "--password", password,
                 dbName, "--oracle", "equation"));
     }
