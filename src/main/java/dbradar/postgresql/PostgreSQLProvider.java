@@ -227,6 +227,12 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
         return globalState.createDatabase();
     }
 
+    @Override
+    public SQLConnection createConnection(GlobalState state) throws Exception {
+        PostgreSQLGlobalState globalState = (PostgreSQLGlobalState) state;
+        return globalState.createConnection();
+    }
+
     protected void readFunctions(PostgreSQLGlobalState globalState) throws SQLException {
         SQLQueryAdapter query = new SQLQueryAdapter("SELECT proname, provolatile FROM pg_proc;");
         try (DBRadarResultSet rs = query.executeAndGet(globalState)) {

@@ -25,9 +25,14 @@ public class DBMSExecutorFactory<G extends GlobalState> {
     }
 
     public DBMSExecutor getDBMSExecutor(String databaseName, Randomly r) {
+        return getDBMSExecutor(databaseName, databaseName, r, true, "");
+    }
+
+    public DBMSExecutor getDBMSExecutor(String databaseName, String logName, Randomly r, boolean createDatabaseOnRun,
+                                        String generatedObjectNamePrefix) {
         try {
             return new DBMSExecutor(provider.getClass().getDeclaredConstructor().newInstance(), options, command,
-                    databaseName, r);
+                    databaseName, logName, r, createDatabaseOnRun, generatedObjectNamePrefix);
         } catch (Exception e) {
             throw new AssertionError(e);
         }

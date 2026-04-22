@@ -41,16 +41,14 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
     public void getDDLSequence(List<String> ddlSeq, int targetDdlCount) {
         int attempts = 0;
 
-        while (ddlSeq.size() < targetDdlCount || genState.getSchema().getDatabaseTables().isEmpty()) {
+        while (ddlSeq.size() < targetDdlCount) {
             if (attempts++ > MAX_BOOTSTRAP_GENERATION_ATTEMPTS) {
                 throw new AssertionError(String.format(
                         "Unable to generate %d successful bootstrap DDL statements",
                         targetDdlCount));
             }
 
-            PostgreSQLDDLStmt ddlStmt = ddlSeq.isEmpty()
-                    ? PostgreSQLDDLStmt.CREATE_TABLE
-                    : Randomly.fromOptions(PostgreSQLDDLStmt.values());
+            PostgreSQLDDLStmt ddlStmt = chooseBootstrapDdlStmt(ddlSeq.size(), targetDdlCount);
             SQLQueryAdapter ddlQuery = null;
             for (int j = 0; j < 100; j++) {
                 try {
@@ -68,6 +66,44 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
             } catch (Exception ignored) {
             }
         }
+
+        if (genState.getSchema().getDatabaseTablesWithoutViews().isEmpty()) {
+            throw new AssertionError("Bootstrap DDL sequence ended without a base table");
+        }
+    }
+
+    private PostgreSQLDDLStmt chooseBootstrapDdlStmt(int currentSuccessfulCount, int targetDdlCount) {
+        if (currentSuccessfulCount == 0 || genState.getSchema().getDatabaseTablesWithoutViews().isEmpty()) {
+            return PostgreSQLDDLStmt.CREATE_TABLE;
+        }
+
+        int remainingStatements = targetDdlCount - currentSuccessfulCount;
+        if (remainingStatements == 1 && genState.getSchema().getDatabaseTablesWithoutViews().size() <= 1) {
+            return Randomly.fromOptions(
+                    PostgreSQLDDLStmt.CREATE_TABLE,
+                    PostgreSQLDDLStmt.CREATE_INDEX,
+                    PostgreSQLDDLStmt.CREATE_VIEW,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ADD_COLUMN,
+                    PostgreSQLDDLStmt.ALTER_TABLE_DROP_COLUMN,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_TYPE,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_DROP_DEFAULT,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_SET_DEFAULT,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_SET_NOT_NULL,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_DROP_NOT_NULL,
+                    PostgreSQLDDLStmt.ALTER_TABLE_SET_COLUMN,
+                    PostgreSQLDDLStmt.ALTER_TABLE_RESET_COLUMN,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_SET_STORAGE,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ADD_UNIQUE_KEY,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ADD_PRIMARY_KEY,
+                    PostgreSQLDDLStmt.ALTER_TABLE_ADD_FOREIGN_KEY,
+                    PostgreSQLDDLStmt.ALTER_TABLE_OPTION,
+                    PostgreSQLDDLStmt.ALTER_TABLE_RENAME_TABLE,
+                    PostgreSQLDDLStmt.REINDEX,
+                    PostgreSQLDDLStmt.TRUNCATE_TABLE,
+                    PostgreSQLDDLStmt.DROP_INDEX,
+                    PostgreSQLDDLStmt.DROP_VIEW);
+        }
+        return Randomly.fromOptions(PostgreSQLDDLStmt.values());
     }
 
     @Override

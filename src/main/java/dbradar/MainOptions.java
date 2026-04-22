@@ -24,7 +24,7 @@ public class MainOptions {
             "--random-seed"}, description = "A seed value != -1 that can be set to make the query and database generation deterministic")
     private long randomSeed = -1; // NOPMD
 
-    @Parameter(names = {"--num-tries"}, description = "Specifies after how many found errors to stop testing")
+    @Parameter(names = {"--num-tries"}, description = "Specifies how many database worker tasks should be submitted in non-stress modes")
     private int totalNumberTries = 100; // NOPMD
 
     @Parameter(names = {"--max-num-inserts"}, description = "Specifies how many INSERT statements should be issued")

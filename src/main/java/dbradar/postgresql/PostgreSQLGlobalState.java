@@ -11,6 +11,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import dbradar.DatabaseConnection;
 import dbradar.MainOptions;
@@ -19,6 +21,9 @@ import dbradar.SQLConnection;
 import dbradar.SQLGlobalState;
 
 public class PostgreSQLGlobalState extends SQLGlobalState {
+
+    private static final Set<String> INITIALIZED_SHARED_DATABASES = ConcurrentHashMap.newKeySet();
+    private static final Map<String, Object> SHARED_DATABASE_LOCKS = new ConcurrentHashMap<>();
 
     private static final String DEFAULT_GENERATOR_CONFIG_PATH = "dbradar/postgresql/postgresql.zz.lua";
     private static final String DEFAULT_GRAMMAR_PATH = "dbradar/postgresql/postgresql.grammar.yy";
@@ -222,8 +227,15 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
         String databaseName = getDatabaseName();
 
         String createDatabaseCommand = getCreateDatabaseCommand(databaseName);
-
+        if (getDbmsSpecificOptions().useSharedStressTopology()) {
+            return createSharedDatabase(host, port, username, password, databaseName, createDatabaseCommand);
+        }
         return createDatabase(host, port, username, password, databaseName, createDatabaseCommand);
+    }
+
+    public static void resetSharedDatabaseTracking() {
+        INITIALIZED_SHARED_DATABASES.clear();
+        SHARED_DATABASE_LOCKS.clear();
     }
 
 
@@ -243,6 +255,23 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
         Connection conn = DriverManager.getConnection(url, username, password);
 
         return new SQLConnection(conn);
+    }
+
+    private SQLConnection createSharedDatabase(String host, int port, String username, String password,
+                                               String databaseName, String createDatabaseCommand) throws SQLException {
+        Object lock = SHARED_DATABASE_LOCKS.computeIfAbsent(databaseName, key -> new Object());
+        synchronized (lock) {
+            if (!INITIALIZED_SHARED_DATABASES.contains(databaseName)) {
+                String url = String.format("jdbc:postgresql://%s:%d/postgres", host, port);
+                try (Connection conn = DriverManager.getConnection(url, username, password);
+                     Statement statement = conn.createStatement()) {
+                    statement.execute("DROP DATABASE IF EXISTS " + databaseName);
+                    statement.execute(createDatabaseCommand);
+                }
+                INITIALIZED_SHARED_DATABASES.add(databaseName);
+            }
+        }
+        return createConnection(host, port, username, password, databaseName);
     }
 
     private String getCreateDatabaseCommand(String databaseName) {

@@ -334,7 +334,7 @@ public class KeyFuncManager extends AbstractKeyFuncManager {
 
         @Override
         public void generateAST(ASTNode parent) {
-            String tableName = globalState.getSchema().getFreeTableName();
+            String tableName = globalState.getSchema().getFreeTableName(globalState.getGeneratedObjectNamePrefix());
             ASTNode tableNode = new ASTNode(new Token(Token.TokenType.TERMINAL, tableName));
             parent.addChild(tableNode);
         }
@@ -644,7 +644,7 @@ public class KeyFuncManager extends AbstractKeyFuncManager {
 
         @Override
         public void generateAST(ASTNode parent) {
-            String indexName = globalState.getSchema().getFreeIndexName();
+            String indexName = globalState.getSchema().getFreeIndexName(globalState.getGeneratedObjectNamePrefix());
             parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, indexName)));
         }
     }
@@ -714,7 +714,7 @@ public class KeyFuncManager extends AbstractKeyFuncManager {
 
         @Override
         public void generateAST(ASTNode parent) {
-            String triggerName = globalState.getSchema().getFreeTriggerName();
+            String triggerName = globalState.getSchema().getFreeTriggerName(globalState.getGeneratedObjectNamePrefix());
             parent.addChild(new ASTNode(new Token(TokenType.TERMINAL, triggerName)));
         }
     }
@@ -728,7 +728,7 @@ public class KeyFuncManager extends AbstractKeyFuncManager {
 
         @Override
         public void generateAST(ASTNode parent) {
-            String viewName = globalState.getSchema().getFreeViewName();
+            String viewName = globalState.getSchema().getFreeViewName(globalState.getGeneratedObjectNamePrefix());
             ASTNode tableNode = new ASTNode(new Token(Token.TokenType.TERMINAL, viewName));
             parent.addChild(tableNode);
         }

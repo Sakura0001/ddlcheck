@@ -62,10 +62,15 @@ public abstract class AbstractSchema<G extends GlobalState, T extends AbstractTa
     }
 
     public String getFreeTableName() {
+        return getFreeTableName("");
+    }
+
+    public String getFreeTableName(String prefix) {
         int i = getDatabaseTables().size();
         do {
-            String tableName = String.format("t%d", i++);
-            String virtualName = "v" + tableName;
+            String baseTableName = String.format("t%d", i++);
+            String tableName = prefix + baseTableName;
+            String virtualName = prefix + "v" + baseTableName;
             if (getDatabaseTables().stream().noneMatch(t -> t.getName().equalsIgnoreCase(tableName))
                     && getDatabaseTables().stream().noneMatch(t -> t.getName().equalsIgnoreCase(virtualName))) {
                 return tableName;
@@ -82,9 +87,13 @@ public abstract class AbstractSchema<G extends GlobalState, T extends AbstractTa
     }
 
     public String getFreeViewName() {
+        return getFreeViewName("");
+    }
+
+    public String getFreeViewName(String prefix) {
         int i = getViews().size();
         do {
-            String viewName = String.format("v%d", i++);
+            String viewName = String.format("%sv%d", prefix, i++);
             if (getViews().stream().noneMatch(t -> t.getName().contentEquals(viewName))) {
                 return viewName;
             }
@@ -96,9 +105,13 @@ public abstract class AbstractSchema<G extends GlobalState, T extends AbstractTa
     }
 
     public String getFreeIndexName() {
+        return getFreeIndexName("");
+    }
+
+    public String getFreeIndexName(String prefix) {
         int i = getDatabaseTables().size();
         do {
-            String indexName = String.format("i%d", i++);
+            String indexName = String.format("%si%d", prefix, i++);
             boolean indexNameFound = false;
             for (T table : getDatabaseTables()) {
                 if (table.getIndexes().stream().anyMatch(ind -> ind.getName().contentEquals(indexName))) {
@@ -124,9 +137,13 @@ public abstract class AbstractSchema<G extends GlobalState, T extends AbstractTa
     }
 
     public String getFreeTriggerName() {
+        return getFreeTriggerName("");
+    }
+
+    public String getFreeTriggerName(String prefix) {
         int i = getTriggers().size();
         do {
-            String triggerName = String.format("tr%d", i++);
+            String triggerName = String.format("%str%d", prefix, i++);
             if (getTriggers().stream().noneMatch(t -> t.getName().contentEquals(triggerName))) {
                 return triggerName;
             }

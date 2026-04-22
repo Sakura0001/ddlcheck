@@ -161,6 +161,9 @@ public class SQLQueryAdapter extends QueryAdapter {
      * conditions.
      */
     public <G extends GlobalState> void checkException(Exception e, G globalState) throws AssertionError {
+        if (isFatalConnectionError(e)) {
+            throw new AssertionError("Fatal database connection error: " + e.getMessage(), e);
+        }
         String errorMessage = e.getMessage();
         for (String regex : globalState.getRegexErrorTypes().keySet()) {
             Pattern pattern = Pattern.compile(regex);
@@ -176,6 +179,9 @@ public class SQLQueryAdapter extends QueryAdapter {
         Throwable ex = e;
 
         while (ex != null) {
+            if (isFatalConnectionError(ex)) {
+                throw new AssertionError("Fatal database connection error: " + ex.getMessage(), e);
+            }
             if (expectedErrors.errorIsExpected(ex.getMessage())) {
                 return;
             } else {
@@ -264,5 +270,29 @@ public class SQLQueryAdapter extends QueryAdapter {
     @Override
     public String getLogString() {
         return getQueryString();
+    }
+
+    private static boolean isFatalConnectionError(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null) {
+                String normalized = message.toLowerCase();
+                if (normalized.contains("server closed the connection unexpectedly")
+                        || normalized.contains("connection reset")
+                        || normalized.contains("terminating connection")
+                        || normalized.contains("an i/o error occurred while sending to the backend")
+                        || normalized.contains("the connection attempt failed")
+                        || normalized.contains("connection has been closed")
+                        || normalized.contains("broken pipe")
+                        || normalized.contains("backend closed the channel")
+                        || normalized.contains("could not receive data from server")
+                        || normalized.contains("connection refused")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 }
