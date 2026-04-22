@@ -12,6 +12,7 @@ import dbradar.postgresql.PostgreSQLProvider.PostgreSQLQueryProvider;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDDLStmt;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDMLStmt;
 import dbradar.postgresql.PostgreSQLSchema;
+import dbradar.postgresql.PostgreSQLTypeCoverageSupport;
 import dbradar.postgresql.PostgresCommon;
 
 import java.sql.ResultSet;
@@ -19,12 +20,17 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
 
     private static final int MAX_BOOTSTRAP_GENERATION_ATTEMPTS = 1000;
     private PostgreSQLGeneratedColumnSupport.GeneratedColumnScenario bootstrapGeneratedColumnScenario;
+    private PostgreSQLTypeCoverageSupport.CoveragePlan typeCoveragePlan;
+    private boolean builtInCoverageTableCreated;
+    private boolean userDefinedCoverageTableCreated;
 
     public PostgreSQLEDCOracle(PostgreSQLGlobalState state) {
         super(state);
@@ -36,26 +42,29 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
     @Override
     public void generateState(List<String> ddlSeq, int targetDdlCount) throws Exception {
         ddlSeq.clear();
-        int randomDdlTarget = Math.max(targetDdlCount - 1, 0);
+        int randomDdlTarget = Math.max(targetDdlCount - getMandatoryBootstrapDdlCount(targetDdlCount), 0);
         if (randomDdlTarget > 0) {
             getDDLSequence(ddlSeq, randomDdlTarget);
         }
         appendGeneratedColumnBootstrapTable(ddlSeq);
+        appendTypeCoverageBootstrapObjects(ddlSeq, targetDdlCount);
     }
 
     @Override
     protected int populateRequiredBootstrapDml() throws SQLException {
-        if (bootstrapGeneratedColumnScenario == null) {
+        int targetSuccessfulDml = genState.getOptions().getDmlCount();
+        if (targetSuccessfulDml <= 0) {
             return 0;
         }
-
-        String insert = bootstrapGeneratedColumnScenario.getInsertQuery().getQueryString();
-        if (!checkStmt(insert, false)) {
-            throw new AssertionError("Unable to insert into the bootstrap generated-column table: "
-                    + bootstrapGeneratedColumnScenario.getTableName());
+        int successfulStatements = 0;
+        successfulStatements += executeBootstrapScenario(bootstrapGeneratedColumnScenario);
+        if (successfulStatements < targetSuccessfulDml && builtInCoverageTableCreated) {
+            successfulStatements += executeBootstrapScenario(typeCoveragePlan.getBuiltInScenario());
         }
-        checkDQLStmt(bootstrapGeneratedColumnScenario.getValidationQuery());
-        return 1;
+        if (successfulStatements < targetSuccessfulDml && userDefinedCoverageTableCreated) {
+            successfulStatements += executeBootstrapScenario(typeCoveragePlan.getUserDefinedScenario());
+        }
+        return successfulStatements;
     }
 
 
@@ -136,6 +145,67 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
         }
     }
 
+    private void appendTypeCoverageBootstrapObjects(List<String> ddlSeq, int targetDdlCount) throws Exception {
+        builtInCoverageTableCreated = false;
+        userDefinedCoverageTableCreated = false;
+        typeCoveragePlan = PostgreSQLTypeCoverageSupport.createCoveragePlan(genState);
+
+        if (targetDdlCount < 2) {
+            return;
+        }
+        executeBootstrapDdl(typeCoveragePlan.getTypeSetupQuery(), ddlSeq);
+
+        if (targetDdlCount < 3) {
+            return;
+        }
+        executeBootstrapDdl(typeCoveragePlan.getBuiltInScenario().getCreateTableQuery(), ddlSeq);
+        builtInCoverageTableCreated = true;
+
+        if (targetDdlCount < 4) {
+            return;
+        }
+        executeBootstrapDdl(typeCoveragePlan.getUserDefinedScenario().getCreateTableQuery(), ddlSeq);
+        userDefinedCoverageTableCreated = true;
+    }
+
+    private void executeBootstrapDdl(SQLQueryAdapter query, List<String> ddlSeq) throws Exception {
+        try (Statement stmt = genState.getConnection().createStatement()) {
+            stmt.execute(query.getQueryString());
+            genState.updateSchema();
+            ddlSeq.add(query.getQueryString());
+        }
+    }
+
+    private int executeBootstrapScenario(PostgreSQLGeneratedColumnSupport.GeneratedColumnScenario scenario) throws SQLException {
+        if (scenario == null) {
+            return 0;
+        }
+        String insert = scenario.getInsertQuery().getQueryString();
+        if (!checkStmt(insert, false)) {
+            throw new AssertionError("Unable to insert into the bootstrap generated-column table: "
+                    + scenario.getTableName());
+        }
+        checkDQLStmt(scenario.getValidationQuery());
+        return 1;
+    }
+
+    private int executeBootstrapScenario(PostgreSQLTypeCoverageSupport.BootstrapScenario scenario) throws SQLException {
+        if (scenario == null) {
+            return 0;
+        }
+        String insert = scenario.getInsertQuery().getQueryString();
+        if (!checkStmt(insert, false)) {
+            throw new AssertionError("Unable to insert into the bootstrap type-coverage table: "
+                    + scenario.getTableName());
+        }
+        checkDQLStmt(scenario.getValidationQuery());
+        return 1;
+    }
+
+    private int getMandatoryBootstrapDdlCount(int targetDdlCount) {
+        return Math.min(targetDdlCount, 4);
+    }
+
     @Override
     public void cleanDatabase() {
         try (Statement disableFKChecks = genState.getConnection().createStatement();
@@ -193,6 +263,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
         List<SQLQueryAdapter> createStmts = new ArrayList<>();
 
         Statement statement = state.getConnection().createStatement();
+        createStmts.addAll(fetchCustomTypeCreateStmts(statement));
         for (PostgreSQLSchema.PostgreSQLTable table : state.getSchema().getDatabaseTables()) {
             String tableName = table.getName();
             try {
@@ -223,14 +294,25 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                     }
                     createStmts.add(new SQLQueryAdapter(createView.toString()));
                 } else {
-                    String fetchColumnInfo = String.format("SELECT column_name, data_type, collation_name, character_maximum_length, column_default, is_nullable, is_generated, generation_expression, identity_generation FROM information_schema.columns WHERE table_name = '%s' ORDER BY ordinal_position", tableName);
+                    String fetchColumnInfo = String.format(
+                            "SELECT c.column_name, "
+                                    + "pg_catalog.format_type(a.atttypid, a.atttypmod) AS formatted_type, "
+                                    + "c.collation_name, c.column_default, c.is_nullable, c.is_generated, "
+                                    + "c.generation_expression, c.identity_generation "
+                                    + "FROM information_schema.columns c "
+                                    + "JOIN pg_class pc ON pc.relname = c.table_name "
+                                    + "JOIN pg_namespace pn ON pn.oid = pc.relnamespace AND pn.nspname = c.table_schema "
+                                    + "JOIN pg_attribute a ON a.attrelid = pc.oid AND a.attname = c.column_name "
+                                    + "WHERE c.table_schema = 'public' AND c.table_name = '%s' "
+                                    + "AND a.attnum > 0 AND NOT a.attisdropped "
+                                    + "ORDER BY c.ordinal_position",
+                            tableName);
                     ResultSet columnRes = statement.executeQuery(fetchColumnInfo);
                     List<String> columns = new ArrayList<>();
                     while (columnRes.next()) {
                         String columnName = columnRes.getString("column_name");
-                        String dataType = columnRes.getString("data_type");
+                        String dataType = columnRes.getString("formatted_type");
                         String collation = columnRes.getString("collation_name");
-                        String dataLength = columnRes.getString("character_maximum_length"); // for a character or bit string
                         boolean isNullable = "YES".equals(columnRes.getString("is_nullable"));
                         String hasDefault = columnRes.getString("column_default");
                         String isGenerated = columnRes.getString("is_generated");
@@ -239,9 +321,6 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
 
                         StringBuilder column = new StringBuilder(columnName);
                         column.append(" ").append(dataType);
-                        if (dataLength != null) {
-                            column.append("(").append(dataLength).append(")");
-                        }
                         if (collation != null) {
                             column.append(" COLLATE \"").append(collation).append("\"");
                         }
@@ -251,7 +330,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                         if (hasDefault != null) {
                             column.append(" ").append("DEFAULT ").append(hasDefault);
                         }
-                        if (isGenerated.equals("ALWAYS")) {
+                        if ("ALWAYS".equals(isGenerated)) {
                             column.append(" ").append("GENERATED ALWAYS AS (").append(generatedExpression).append(") STORED");
                         }
                         if (identityGeneration != null) {
@@ -342,13 +421,17 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                     createStmts.add(new SQLQueryAdapter(createTable.toString()));
 
                     // obtain create index on table
-                    String fetchIndexInfo = String.format("SELECT indexdef FROM pg_indexes WHERE tablename='%s'", tableName);
-                    ResultSet indexRes = statement.executeQuery(fetchIndexInfo);
-                    while (indexRes.next()) {
-                        String indexInfo = indexRes.getString("indexdef");
-                        createStmts.add(new SQLQueryAdapter(indexInfo));
+                    if (!table.isTemporary()) {
+                        String fetchIndexInfo = String.format(
+                                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename='%s'",
+                                tableName);
+                        ResultSet indexRes = statement.executeQuery(fetchIndexInfo);
+                        while (indexRes.next()) {
+                            String indexInfo = indexRes.getString("indexdef");
+                            createStmts.add(new SQLQueryAdapter(indexInfo));
+                        }
+                        indexRes.close();
                     }
-                    indexRes.close();
                 }
             } catch (SQLException ignored) {
             }
@@ -374,6 +457,132 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
         statement.close();
 
         return createStmts;
+    }
+
+    private List<SQLQueryAdapter> fetchCustomTypeCreateStmts(Statement statement) throws SQLException {
+        List<SQLQueryAdapter> createStmts = new ArrayList<>();
+        createStmts.addAll(fetchEnumTypeCreateStmts(statement));
+        createStmts.addAll(fetchDomainCreateStmts(statement));
+        createStmts.addAll(fetchCompositeTypeCreateStmts(statement));
+        return createStmts;
+    }
+
+    private List<SQLQueryAdapter> fetchEnumTypeCreateStmts(Statement statement) throws SQLException {
+        Map<String, List<String>> enumLabels = new LinkedHashMap<>();
+        String fetchEnums = "SELECT t.typname, e.enumlabel "
+                + "FROM pg_type t "
+                + "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                + "JOIN pg_enum e ON e.enumtypid = t.oid "
+                + "WHERE n.nspname = 'public' AND t.typtype = 'e' "
+                + "ORDER BY t.typname, e.enumsortorder";
+        try (ResultSet enumRes = statement.executeQuery(fetchEnums)) {
+            while (enumRes.next()) {
+                enumLabels.computeIfAbsent(enumRes.getString("typname"), key -> new ArrayList<>())
+                        .add(enumRes.getString("enumlabel"));
+            }
+        }
+
+        List<SQLQueryAdapter> createStmts = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : enumLabels.entrySet()) {
+            List<String> escapedLabels = entry.getValue().stream()
+                    .map(PostgreSQLEDCOracle::quoteLiteral)
+                    .toList();
+            String createEnum = String.format("CREATE TYPE %s AS ENUM (%s)",
+                    entry.getKey(), Strings.join(", ", escapedLabels));
+            createStmts.add(new SQLQueryAdapter(createEnum));
+        }
+        return createStmts;
+    }
+
+    private List<SQLQueryAdapter> fetchDomainCreateStmts(Statement statement) throws SQLException {
+        Map<String, DomainDefinition> domains = new LinkedHashMap<>();
+        String fetchDomains = "SELECT t.typname, "
+                + "pg_catalog.format_type(t.typbasetype, t.typtypmod) AS base_type, "
+                + "t.typnotnull, "
+                + "pg_get_expr(t.typdefaultbin, 0, true) AS default_expr, "
+                + "pg_get_constraintdef(c.oid, true) AS constraint_def "
+                + "FROM pg_type t "
+                + "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                + "LEFT JOIN pg_constraint c ON c.contypid = t.oid "
+                + "WHERE n.nspname = 'public' AND t.typtype = 'd' "
+                + "ORDER BY t.typname, c.conname";
+        try (ResultSet domainRes = statement.executeQuery(fetchDomains)) {
+            while (domainRes.next()) {
+                String typeName = domainRes.getString("typname");
+                String baseType = domainRes.getString("base_type");
+                boolean notNull = domainRes.getBoolean("typnotnull");
+                String defaultExpression = domainRes.getString("default_expr");
+                DomainDefinition definition = domains.computeIfAbsent(typeName, key -> new DomainDefinition(
+                        typeName, baseType, notNull, defaultExpression));
+                String constraint = domainRes.getString("constraint_def");
+                if (constraint != null) {
+                    definition.constraints.add(constraint);
+                }
+            }
+        }
+
+        List<SQLQueryAdapter> createStmts = new ArrayList<>();
+        for (DomainDefinition definition : domains.values()) {
+            StringBuilder createDomain = new StringBuilder(
+                    String.format("CREATE DOMAIN %s AS %s", definition.name, definition.baseType));
+            if (definition.defaultExpression != null) {
+                createDomain.append(" DEFAULT ").append(definition.defaultExpression);
+            }
+            if (definition.notNull) {
+                createDomain.append(" NOT NULL");
+            }
+            for (String constraint : definition.constraints) {
+                createDomain.append(" ").append(constraint);
+            }
+            createStmts.add(new SQLQueryAdapter(createDomain.toString()));
+        }
+        return createStmts;
+    }
+
+    private List<SQLQueryAdapter> fetchCompositeTypeCreateStmts(Statement statement) throws SQLException {
+        Map<String, List<String>> compositeAttributes = new LinkedHashMap<>();
+        String fetchCompositeTypes = "SELECT t.typname, a.attname, "
+                + "pg_catalog.format_type(a.atttypid, a.atttypmod) AS attribute_type "
+                + "FROM pg_type t "
+                + "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                + "JOIN pg_class c ON c.oid = t.typrelid AND c.relkind = 'c' "
+                + "JOIN pg_attribute a ON a.attrelid = c.oid "
+                + "WHERE n.nspname = 'public' AND t.typtype = 'c' "
+                + "AND a.attnum > 0 AND NOT a.attisdropped "
+                + "ORDER BY t.typname, a.attnum";
+        try (ResultSet compositeRes = statement.executeQuery(fetchCompositeTypes)) {
+            while (compositeRes.next()) {
+                compositeAttributes.computeIfAbsent(compositeRes.getString("typname"), key -> new ArrayList<>())
+                        .add(compositeRes.getString("attname") + " " + compositeRes.getString("attribute_type"));
+            }
+        }
+
+        List<SQLQueryAdapter> createStmts = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : compositeAttributes.entrySet()) {
+            String createComposite = String.format("CREATE TYPE %s AS (%s)",
+                    entry.getKey(), Strings.join(", ", entry.getValue()));
+            createStmts.add(new SQLQueryAdapter(createComposite));
+        }
+        return createStmts;
+    }
+
+    private static String quoteLiteral(String value) {
+        return "'" + value.replace("'", "''") + "'";
+    }
+
+    private static final class DomainDefinition {
+        private final String name;
+        private final String baseType;
+        private final boolean notNull;
+        private final String defaultExpression;
+        private final List<String> constraints = new ArrayList<>();
+
+        private DomainDefinition(String name, String baseType, boolean notNull, String defaultExpression) {
+            this.name = name;
+            this.baseType = baseType;
+            this.notNull = notNull;
+            this.defaultExpression = defaultExpression;
+        }
     }
 
     @Override

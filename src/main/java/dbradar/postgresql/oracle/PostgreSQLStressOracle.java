@@ -8,6 +8,7 @@ import dbradar.common.query.SQLQueryAdapter;
 import dbradar.common.query.generator.QueryGenerationException;
 import dbradar.postgresql.PostgreSQLGlobalState;
 import dbradar.postgresql.PostgreSQLGeneratedColumnSupport;
+import dbradar.postgresql.PostgreSQLTypeCoverageSupport;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDDLStmt;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDMLStmt;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLQueryProvider;
@@ -50,6 +51,9 @@ public final class PostgreSQLStressOracle implements TestOracle {
     private final PostgreSQLGlobalState state;
     private boolean initialized;
     private PostgreSQLGeneratedColumnSupport.GeneratedColumnScenario bootstrapGeneratedColumnScenario;
+    private PostgreSQLTypeCoverageSupport.CoveragePlan typeCoveragePlan;
+    private boolean builtInCoverageTableCreated;
+    private boolean userDefinedCoverageTableCreated;
     private int nextStatementKindIndex = Randomly.getNotCachedInteger(0, StressStatementKind.values().length);
 
     public PostgreSQLStressOracle(PostgreSQLGlobalState state) {
@@ -83,7 +87,7 @@ public final class PostgreSQLStressOracle implements TestOracle {
 
     private void bootstrapDdl() throws Exception {
         int successCount = 0;
-        int targetRandomDdl = Math.max(state.getOptions().getDdlCount() - 1, 0);
+        int targetRandomDdl = Math.max(state.getOptions().getDdlCount() - getMandatoryBootstrapDdlCount(), 0);
         int attempts = 0;
         while (successCount < targetRandomDdl) {
             if (attempts++ >= MAX_BOOTSTRAP_ATTEMPTS) {
@@ -96,17 +100,37 @@ public final class PostgreSQLStressOracle implements TestOracle {
         if (!executeGeneratedColumnBootstrapDdl()) {
             throw new AssertionError("Unable to create the mandatory generated-column table during stress bootstrap");
         }
+        appendTypeCoverageBootstrapObjects();
     }
 
     private void bootstrapDml() throws Exception {
+        int targetSuccessfulDml = state.getOptions().getDmlCount();
+        if (targetSuccessfulDml <= 0) {
+            return;
+        }
+
+        int successCount = 0;
         if (!executeGeneratedColumnBootstrapDml()) {
             throw new AssertionError("Unable to insert into the mandatory generated-column table during stress bootstrap");
         }
-        int successCount = 1;
+        successCount++;
+        if (successCount < targetSuccessfulDml && builtInCoverageTableCreated && !executeCoverageBootstrapDml(
+                typeCoveragePlan.getBuiltInScenario())) {
+            throw new AssertionError("Unable to insert into the built-in type coverage table during stress bootstrap");
+        } else if (successCount < targetSuccessfulDml && builtInCoverageTableCreated) {
+            successCount++;
+        }
+        if (successCount < targetSuccessfulDml && userDefinedCoverageTableCreated && !executeCoverageBootstrapDml(
+                typeCoveragePlan.getUserDefinedScenario())) {
+            throw new AssertionError("Unable to insert into the user-defined type coverage table during stress bootstrap");
+        } else if (successCount < targetSuccessfulDml && userDefinedCoverageTableCreated) {
+            successCount++;
+        }
+
         int maxAttempts = Math.max(MAX_BOOTSTRAP_ATTEMPTS,
-                state.getOptions().getDmlCount() * state.getOptions().getNrStatementRetryCount());
+                targetSuccessfulDml * state.getOptions().getNrStatementRetryCount());
         int attempts = 0;
-        while (successCount < state.getOptions().getDmlCount()) {
+        while (successCount < targetSuccessfulDml) {
             if (attempts++ >= maxAttempts) {
                 throw new AssertionError("Unable to satisfy the requested successful DML bootstrap count");
             }
@@ -270,6 +294,52 @@ public final class PostgreSQLStressOracle implements TestOracle {
                 .executeAndGet(state.getConnection(), false)) {
             return ignored != null;
         }
+    }
+
+    private void appendTypeCoverageBootstrapObjects() throws Exception {
+        builtInCoverageTableCreated = false;
+        userDefinedCoverageTableCreated = false;
+        typeCoveragePlan = PostgreSQLTypeCoverageSupport.createCoveragePlan(state);
+
+        if (state.getOptions().getDdlCount() < 2) {
+            return;
+        }
+        if (!executeStatement(typeCoveragePlan.getTypeSetupQuery())) {
+            throw new AssertionError("Unable to create the custom types required by the stress bootstrap");
+        }
+
+        if (state.getOptions().getDdlCount() < 3) {
+            return;
+        }
+        if (!executeStatement(typeCoveragePlan.getBuiltInScenario().getCreateTableQuery())) {
+            throw new AssertionError("Unable to create the built-in type coverage table during stress bootstrap");
+        }
+        builtInCoverageTableCreated = true;
+
+        if (state.getOptions().getDdlCount() < 4) {
+            return;
+        }
+        if (!executeStatement(typeCoveragePlan.getUserDefinedScenario().getCreateTableQuery())) {
+            throw new AssertionError("Unable to create the user-defined type coverage table during stress bootstrap");
+        }
+        userDefinedCoverageTableCreated = true;
+    }
+
+    private boolean executeCoverageBootstrapDml(PostgreSQLTypeCoverageSupport.BootstrapScenario scenario) throws Exception {
+        if (scenario == null) {
+            return false;
+        }
+        boolean success = executeStatement(scenario.getInsertQuery());
+        if (!success) {
+            return false;
+        }
+        try (DBRadarResultSet ignored = scenario.getValidationQuery().executeAndGet(state.getConnection(), false)) {
+            return ignored != null;
+        }
+    }
+
+    private int getMandatoryBootstrapDdlCount() {
+        return Math.min(state.getOptions().getDdlCount(), 4);
     }
 
     private enum StressStatementKind {

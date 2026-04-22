@@ -8,6 +8,7 @@ import java.util.Objects;
 
 import dbradar.GlobalState;
 import dbradar.Randomly;
+import dbradar.SQLConnection;
 import dbradar.common.query.generator.config.DBConfig;
 import dbradar.common.schema.AbstractTableColumn;
 import dbradar.postgresql.PostgreSQLSchema;
@@ -34,6 +35,10 @@ public class GeneratorRegister {
     private Generator getGeneratorInternal(AbstractTableColumn<?, ?> column) {
         if (column instanceof PostgreSQLSchema.PostgreSQLColumn) {
             PostgreSQLSchema.PostgreSQLColumn postgreSQLColumn = (PostgreSQLSchema.PostgreSQLColumn) column;
+            Generator specificGenerator = getPostgreSQLSpecificGenerator(postgreSQLColumn);
+            if (specificGenerator != null) {
+                return specificGenerator;
+            }
             if (postgreSQLColumn.getType() == PostgreSQLSchema.PostgreSQLDataType.BIT) {
                 long declaredLength = postgreSQLColumn.getCharacterMaximumLength();
                 boolean fixedLength = "bit".equals(postgreSQLColumn.getDataType());
@@ -60,6 +65,114 @@ public class GeneratorRegister {
         }
 
         return generator;
+    }
+
+    private Generator getPostgreSQLSpecificGenerator(PostgreSQLSchema.PostgreSQLColumn column) {
+        switch (column.getType()) {
+            case UUID:
+                return new LambdaGenerator(state -> "'" + java.util.UUID.randomUUID() + "'::uuid");
+            case JSON:
+                return new LambdaGenerator(state -> String.format("'{\"value\":%d}'::json",
+                        Randomly.getNotCachedInteger(0, 1000)));
+            case JSONB:
+                return new LambdaGenerator(state -> String.format("'{\"value\":%d}'::jsonb",
+                        Randomly.getNotCachedInteger(0, 1000)));
+            case XML:
+                return new LambdaGenerator(state -> String.format("xmlparse(content '<root><value>%d</value></root>')",
+                        Randomly.getNotCachedInteger(0, 1000)));
+            case BYTEA:
+                return new LambdaGenerator(state -> String.format("'\\\\x%08X'::bytea",
+                        Randomly.getNotCachedInteger(0, Integer.MAX_VALUE)));
+            case MONEY:
+                return new LambdaGenerator(state -> String.format("'%d.%02d'::money",
+                        Randomly.getNotCachedInteger(0, 1000),
+                        Randomly.getNotCachedInteger(0, 99)));
+            case DATE:
+                return new LambdaGenerator(state -> "DATE " + basicGenerators.get("date").generate(state));
+            case TIME:
+                return new LambdaGenerator(state -> "TIME " + basicGenerators.get("time").generate(state));
+            case TIMESTAMP:
+                return new LambdaGenerator(state -> "TIMESTAMP " + basicGenerators.get("datetime").generate(state));
+            case POINT:
+                return new LambdaGenerator(state -> String.format("point(%d,%d)",
+                        Randomly.getNotCachedInteger(0, 100), Randomly.getNotCachedInteger(0, 100)));
+            case BOX:
+                return new LambdaGenerator(state -> "box(point(0,0), point(3,4))");
+            case LSEG:
+                return new LambdaGenerator(state -> "lseg(point(0,0), point(2,2))");
+            case PATH:
+                return new LambdaGenerator(state -> "path '((0,0),(1,1),(2,0))'");
+            case POLYGON:
+                return new LambdaGenerator(state -> "polygon '((0,0),(2,0),(2,2),(0,2))'");
+            case CIRCLE:
+                return new LambdaGenerator(state -> "circle(point(1,1), 5)");
+            case CIDR:
+                return new LambdaGenerator(state -> String.format("'192.168.%d.0/24'::cidr",
+                        Randomly.getNotCachedInteger(0, 255)));
+            case MACADDR:
+                return new LambdaGenerator(state -> String.format("'08:00:2b:%02x:%02x:%02x'::%s",
+                        Randomly.getNotCachedInteger(0, 255),
+                        Randomly.getNotCachedInteger(0, 255),
+                        Randomly.getNotCachedInteger(0, 255),
+                        column.getDataType()));
+            case TSVECTOR:
+                return new LambdaGenerator(state -> "to_tsvector('simple', 'alpha beta gamma')");
+            case TSQUERY:
+                return new LambdaGenerator(state -> "to_tsquery('simple', 'alpha & beta')");
+            case PG_LSN:
+                return new LambdaGenerator(state -> "'0/16B6C50'::pg_lsn");
+            case OID:
+                return new LambdaGenerator(state -> "1::oid");
+            case ARRAY:
+                return new LambdaGenerator(state -> generatePostgreSQLArrayLiteral(column));
+            case MULTIRANGE:
+                return new LambdaGenerator(state -> String.format("'{[1,4),[8,12)}'::%s", column.getDataType()));
+            case ENUM:
+                return new LambdaGenerator(state -> generatePostgreSQLEnumLiteral(column, state));
+            case COMPOSITE:
+                return new LambdaGenerator(state -> String.format("ROW(1, 'component')::%s", column.getUdtName()));
+            default:
+                return null;
+        }
+    }
+
+    private String generatePostgreSQLArrayLiteral(PostgreSQLSchema.PostgreSQLColumn column) {
+        if ("_int4".equals(column.getUdtName())) {
+            return "ARRAY[1,2,3]";
+        }
+        if ("_text".equals(column.getUdtName())) {
+            return "ARRAY['alpha','beta','gamma']";
+        }
+        if ("_bool".equals(column.getUdtName())) {
+            return "ARRAY[TRUE,FALSE,TRUE]";
+        }
+        if ("_uuid".equals(column.getUdtName())) {
+            return "ARRAY['00000000-0000-0000-0000-000000000001'::uuid,'00000000-0000-0000-0000-000000000002'::uuid]";
+        }
+        throw new RuntimeException("Unsupported PostgreSQL array element type: " + column.getUdtName());
+    }
+
+    private String generatePostgreSQLEnumLiteral(PostgreSQLSchema.PostgreSQLColumn column, GlobalState globalState) {
+        List<String> enumLabels = new ArrayList<>();
+        try (java.sql.Statement statement = ((SQLConnection) globalState.getConnection()).createStatement();
+             java.sql.ResultSet rs = statement.executeQuery(String.format(
+                     "SELECT enumlabel FROM pg_enum e "
+                             + "JOIN pg_type t ON t.oid = e.enumtypid "
+                             + "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                             + "WHERE n.nspname = 'public' AND t.typname = '%s' "
+                             + "ORDER BY e.enumsortorder",
+                     column.getUdtName()))) {
+            while (rs.next()) {
+                enumLabels.add(rs.getString(1));
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Unable to fetch PostgreSQL enum labels for " + column.getUdtName(), e);
+        }
+        if (enumLabels.isEmpty()) {
+            throw new RuntimeException("No enum labels found for PostgreSQL enum type " + column.getUdtName());
+        }
+        String enumLabel = Randomly.fromList(enumLabels);
+        return String.format("'%s'::%s", enumLabel, column.getUdtName());
     }
 
     public static Map<String, Generator> getBasicGenerators(GlobalState globalState) {

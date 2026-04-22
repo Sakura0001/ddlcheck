@@ -306,9 +306,7 @@ numerical_funcs:
     | xor(numerical_expr)
     | tan(numerical_expr)
     | @(numerical_expr)
-    | date_diff(date_element, date_expr, date_expr)
     | date_part(date_element,date_expr)
-    | date_sub(date_element, date_expr,date_expr)
 
 varchar_expr:
     (expr) {print("::")} VARCHAR
@@ -321,16 +319,13 @@ collate:
     varchar_expr collation
 
 collation:
-    COLLATE NOACCENT
-    | COLLATE NOCASE
-    | COLLATE NOACCENT.NOCASE
-    | COLLATE C
+    COLLATE C
     | COLLATE POSIX
 
 varchar_funcs:
-    strftime(date_expr, {print("'%a, %-d %B %Y'")})
-    | dayname(date_expr)
-    | monthname(date_expr)
+    lower(varchar_expr)
+    | upper(varchar_expr)
+    | initcap(varchar_expr)
 
 date_expr:
     _date
@@ -561,7 +556,6 @@ alter_table_option:
     | NO FORCE ROW LEVEL SECURITY
     | CLUSTER ON _index
     | SET WITHOUT CLUSTER
-    | SET WITHOUT OIDS
     | SET LOGGED
     | SET UNLOGGED
     | OWNER TO CURRENT_USER
