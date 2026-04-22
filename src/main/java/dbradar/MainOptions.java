@@ -30,6 +30,12 @@ public class MainOptions {
     @Parameter(names = {"--max-num-inserts"}, description = "Specifies how many INSERT statements should be issued")
     private int maxNumberInserts = 30; // NOPMD
 
+    @Parameter(names = {"--ddl-count"}, description = "Specifies how many successful DDL statements should be executed during each database bootstrap round")
+    private int ddlCount = 10; // NOPMD
+
+    @Parameter(names = {"--dml-count"}, description = "Specifies how many successful DML statements should be executed during each database bootstrap round")
+    private int dmlCount = 10; // NOPMD
+
     @Parameter(names = {
             "--max-expression-depth"}, description = "Specifies the maximum depth of randomly-generated expressions")
     private int maxExpressionDepth = 3; // NOPMD
@@ -228,6 +234,14 @@ public class MainOptions {
 
     public int getMaxNumberInserts() {
         return maxNumberInserts;
+    }
+
+    public int getDdlCount() {
+        return ddlCount;
+    }
+
+    public int getDmlCount() {
+        return dmlCount;
     }
 
     public int getNrStatementRetryCount() {

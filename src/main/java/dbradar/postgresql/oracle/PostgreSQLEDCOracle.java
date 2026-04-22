@@ -1,6 +1,7 @@
 package dbradar.postgresql.oracle;
 
 import com.beust.jcommander.Strings;
+import dbradar.IgnoreMeException;
 import dbradar.Randomly;
 import dbradar.common.oracle.edc.EDCBase;
 import dbradar.common.query.SQLQueryAdapter;
@@ -21,6 +22,8 @@ import java.util.List;
 
 public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
 
+    private static final int MAX_BOOTSTRAP_GENERATION_ATTEMPTS = 1000;
+
     public PostgreSQLEDCOracle(PostgreSQLGlobalState state) {
         super(state);
         synState = new PostgreSQLGlobalState();
@@ -29,32 +32,31 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
     }
 
     @Override
-    public void generateState(List<String> ddlSeq) throws Exception {
+    public void generateState(List<String> ddlSeq, int targetDdlCount) throws Exception {
         ddlSeq.clear();
-        getDDLSequence(ddlSeq);
+        getDDLSequence(ddlSeq, targetDdlCount);
     }
 
 
-    public void getDDLSequence(List<String> ddlSeq) {
-        while (ddlSeq.isEmpty()) {
-            String createTable = PostgreSQLDDLStmt.CREATE_TABLE.getQueryProvider().getQuery(genState).getQueryString();
-            try (Statement stmt = genState.getConnection().createStatement()) {
-                stmt.execute(createTable);
-                genState.updateSchema();
-                ddlSeq.add(createTable);
-            } catch (Exception ignored) {
-            }
-        }
+    public void getDDLSequence(List<String> ddlSeq, int targetDdlCount) {
+        int attempts = 0;
 
-        int currentLength = Randomly.getNotCachedInteger(2, maxLength);
-        for (int i = 0; i < currentLength; i++) {
-            PostgreSQLDDLStmt ddlStmt = Randomly.fromOptions(PostgreSQLDDLStmt.values());
+        while (ddlSeq.size() < targetDdlCount || genState.getSchema().getDatabaseTables().isEmpty()) {
+            if (attempts++ > MAX_BOOTSTRAP_GENERATION_ATTEMPTS) {
+                throw new AssertionError(String.format(
+                        "Unable to generate %d successful bootstrap DDL statements",
+                        targetDdlCount));
+            }
+
+            PostgreSQLDDLStmt ddlStmt = ddlSeq.isEmpty()
+                    ? PostgreSQLDDLStmt.CREATE_TABLE
+                    : Randomly.fromOptions(PostgreSQLDDLStmt.values());
             SQLQueryAdapter ddlQuery = null;
             for (int j = 0; j < 100; j++) {
                 try {
                     ddlQuery = ddlStmt.getQueryProvider().getQuery(genState);
                     break;
-                } catch (QueryGenerationException ignored) {
+                } catch (QueryGenerationException | IgnoreMeException ignored) {
                 }
             }
             if (ddlQuery == null) continue;
@@ -318,7 +320,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
         for (int i = 0; i < 10; i++) {
             try {
                 return PostgreSQLDMLStmt.getRandomDML(state);
-            } catch (QueryGenerationException ignored) {
+            } catch (QueryGenerationException | IgnoreMeException ignored) {
             }
         }
 
