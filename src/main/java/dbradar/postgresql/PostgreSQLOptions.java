@@ -18,13 +18,6 @@ public class PostgreSQLOptions implements DBMSSpecificOptions {
     public static final String DEFAULT_HOST = "localhost";
     public static final int DEFAULT_PORT = 5432;
 
-    @Parameter(names = "--test-init", description = "Whether to initialize the database state transition graph")
-    private boolean testInit = false;
-
-    public boolean isTestInit() {
-        return testInit;
-    }
-
     @Parameter(names = "--bulk-insert", description = "Specifies whether INSERT statements should be issued in bulk", arity = 1)
     public boolean allowBulkInsert;
 

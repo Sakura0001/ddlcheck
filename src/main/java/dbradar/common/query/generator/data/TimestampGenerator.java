@@ -23,7 +23,7 @@ public class TimestampGenerator implements Generator {
     @Override
     public String generate(GlobalState state) {
         String temporal = generator.generate(state);
-        // TODO need to format, e.g., in MySQL, timestamp: '0000-00-00 00:00:00'
+        // TODO need to support additional timestamp output formats.
         if (format.isEmpty()) {
             format = "%04d%02d%02d%02d%02d%02d";
         }
