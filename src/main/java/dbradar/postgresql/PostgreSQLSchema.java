@@ -195,16 +195,17 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
             List<PostgreSQLTable> databaseTables = new ArrayList<>();
             try (Statement s = con.createStatement()) {
                 try (ResultSet rs = s.executeQuery(
-                        "SELECT table_name, table_schema, table_type, is_insertable_into FROM information_schema.tables WHERE table_schema='public' OR table_schema LIKE 'pg_temp_%' ORDER BY table_name;")) {
+                        "SELECT t.table_name, t.table_schema, t.table_type, t.is_insertable_into,"
+                                + " EXISTS (SELECT 1 FROM information_schema.views v"
+                                + " WHERE v.table_schema = t.table_schema AND v.table_name = t.table_name) AS is_view"
+                                + " FROM information_schema.tables t"
+                                + " WHERE t.table_schema='public' OR t.table_schema LIKE 'pg_temp_%'"
+                                + " ORDER BY t.table_name;")) {
                     while (rs.next()) {
                         String tableName = rs.getString("table_name");
                         String tableTypeSchema = rs.getString("table_schema");
                         boolean isInsertable = rs.getBoolean("is_insertable_into");
-                        // TODO: also check insertable
-                        // TODO: insert into view?
-                        boolean isView = tableName.startsWith("v"); // tableTypeStr.contains("VIEW") ||
-                        // tableTypeStr.contains("LOCAL TEMPORARY") &&
-                        // !isInsertable;
+                        boolean isView = rs.getBoolean("is_view");
                         PostgreSQLTable.TableType tableType = getTableType(tableTypeSchema);
                         List<PostgreSQLColumn> columns = getTableColumns(con, tableName);
                         List<PostgreSQLIndex> indexes = getIndexes(con, tableName);
@@ -220,6 +221,10 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
                                 for (PostgreSQLColumn column : columns) {
                                     if (columnName.equals(column.getName())) {
                                         index.getColumns().add(column);
+                                        if (index.isPrimaryKey()) {
+                                            column.setPrimaryKey(true);
+                                            column.setNotNull(true);
+                                        }
                                         break;
                                     }
                                 }
@@ -310,7 +315,7 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         try (Statement s = con.createStatement()) {
             try (ResultSet rs = s
                     .executeQuery("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name = '"
-                            + tableName + "' ORDER BY column_name")) {
+                            + tableName + "' ORDER BY ordinal_position")) {
                 while (rs.next()) {
                     PostgreSQLColumn column = new PostgreSQLColumn(
                             rs.getString("COLUMN_NAME"),
@@ -321,6 +326,8 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
                             rs.getInt("NUMERIC_PRECISION"),
                             rs.getInt("NUMERIC_SCALE")
                     );
+                    column.setGenerated("ALWAYS".equals(rs.getString("IS_GENERATED")));
+                    column.setNotNull("NO".equals(rs.getString("IS_NULLABLE")));
                     columns.add(column);
                 }
             }

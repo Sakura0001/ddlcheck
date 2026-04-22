@@ -1,9 +1,9 @@
 # [CREATE TABLE](https://www.postgresql.org/docs/current/sql-createtable.html)
 create_table:
-    CREATE TABLE if_not_exist? _new_table_name (first_new_column more_new_column* table_constraint*) table_option*
-    | CREATE temporary? TABLE if_not_exist? _new_table_name (first_new_column more_new_column* table_constraint*) table_option*
+    CREATE TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
+    | CREATE temporary? TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
     @disable-oracle write_guard, transaction_verifier
-    | CREATE UNLOGGED? TABLE if_not_exist? _new_table_name (first_new_column more_new_column* table_constraint*) table_option*
+    | CREATE UNLOGGED? TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
 
 temporary:
     TEMP
@@ -14,6 +14,23 @@ if_not_exist:
 
 first_new_column:
     new_column
+
+wide_new_columns:
+    new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
 
 new_column_more:
     , new_column

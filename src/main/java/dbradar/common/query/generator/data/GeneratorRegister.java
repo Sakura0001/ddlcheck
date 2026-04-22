@@ -10,6 +10,7 @@ import dbradar.GlobalState;
 import dbradar.Randomly;
 import dbradar.common.query.generator.config.DBConfig;
 import dbradar.common.schema.AbstractTableColumn;
+import dbradar.postgresql.PostgreSQLSchema;
 
 public class GeneratorRegister {
 
@@ -31,6 +32,16 @@ public class GeneratorRegister {
     }
 
     private Generator getGeneratorInternal(AbstractTableColumn<?, ?> column) {
+        if (column instanceof PostgreSQLSchema.PostgreSQLColumn) {
+            PostgreSQLSchema.PostgreSQLColumn postgreSQLColumn = (PostgreSQLSchema.PostgreSQLColumn) column;
+            if (postgreSQLColumn.getType() == PostgreSQLSchema.PostgreSQLDataType.BIT) {
+                long declaredLength = postgreSQLColumn.getCharacterMaximumLength();
+                boolean fixedLength = "bit".equals(postgreSQLColumn.getDataType());
+                if (declaredLength > 0) {
+                    return new BitGenerator((int) declaredLength, fixedLength);
+                }
+            }
+        }
         Generator generator;
         String type = column.getType().toString().toLowerCase();
         generator = composeGenerators.get(type);

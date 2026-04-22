@@ -24,6 +24,7 @@ import com.beust.jcommander.JCommander;
 import com.beust.jcommander.JCommander.Builder;
 import dbradar.postgresql.PostgreSQLOptions;
 import dbradar.postgresql.PostgreSQLProvider;
+import dbradar.postgresql.oracle.PostgreSQLStressOracle;
 
 public final class Main {
 
@@ -287,7 +288,9 @@ public final class Main {
 
     private static boolean runExecutor(MainOptions options, DBMSExecutor executor,
                                        List<Map<Integer, Map<Integer, Integer>>> seqCounterList) {
-        executor.setSeqCounterList(seqCounterList);
+        if (shouldUseSequenceCounters(executor)) {
+            executor.setSeqCounterList(seqCounterList);
+        }
         try {
             executor.run();
             return true;
@@ -359,12 +362,21 @@ public final class Main {
         return "thr" + workerIndex + "_";
     }
 
+    private static boolean shouldUseSequenceCounters(DBMSExecutor executor) {
+        if (executor.getCommand() instanceof PostgreSQLOptions) {
+            PostgreSQLOptions options = (PostgreSQLOptions) executor.getCommand();
+            return !options.useStress();
+        }
+        return true;
+    }
+
     private static void resetRuntimeState() {
         nrQueries.set(0);
         nrDatabases.set(0);
         nrSuccessfulActions.set(0);
         nrUnsuccessfulActions.set(0);
         threadsShutdown.set(0);
+        PostgreSQLStressOracle.resetSharedBootstrapTracking();
     }
 
     private static synchronized void startProgressMonitor() {

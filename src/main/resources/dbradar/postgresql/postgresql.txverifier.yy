@@ -1,8 +1,25 @@
 create_table:
-    CREATE TABLE _new_table_name (first_new_column more_new_column*)
+    CREATE TABLE _new_table_name (wide_new_columns)
 
 first_new_column:
     new_column
+
+wide_new_columns:
+    new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
+    more_new_column?
 
 more_new_column:
     , new_column

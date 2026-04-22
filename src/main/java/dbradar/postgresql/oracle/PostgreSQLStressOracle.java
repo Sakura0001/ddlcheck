@@ -11,13 +11,44 @@ import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDDLStmt;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLDMLStmt;
 import dbradar.postgresql.PostgreSQLProvider.PostgreSQLQueryProvider;
 
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 public final class PostgreSQLStressOracle implements TestOracle {
 
     private static final int MAX_BOOTSTRAP_ATTEMPTS = 1000;
     private static final int MAX_GENERATION_ATTEMPTS = 100;
+    private static final Set<String> BOOTSTRAPPED_SHARED_DATABASES = ConcurrentHashMap.newKeySet();
+    private static final Map<String, Object> SHARED_BOOTSTRAP_LOCKS = new ConcurrentHashMap<>();
+    private static final PostgreSQLDDLStmt[] SAFE_BOOTSTRAP_DDL = {
+            PostgreSQLDDLStmt.CREATE_TABLE,
+            PostgreSQLDDLStmt.CREATE_INDEX,
+            PostgreSQLDDLStmt.CREATE_VIEW,
+            PostgreSQLDDLStmt.ALTER_TABLE_ADD_COLUMN,
+            PostgreSQLDDLStmt.ALTER_TABLE_DROP_COLUMN,
+            PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_TYPE,
+            PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_DROP_DEFAULT,
+            PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_SET_DEFAULT,
+            PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_SET_NOT_NULL,
+            PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_DROP_NOT_NULL,
+            PostgreSQLDDLStmt.ALTER_TABLE_SET_COLUMN,
+            PostgreSQLDDLStmt.ALTER_TABLE_RESET_COLUMN,
+            PostgreSQLDDLStmt.ALTER_TABLE_ALTER_COLUMN_SET_STORAGE,
+            PostgreSQLDDLStmt.ALTER_TABLE_ADD_UNIQUE_KEY,
+            PostgreSQLDDLStmt.ALTER_TABLE_ADD_PRIMARY_KEY,
+            PostgreSQLDDLStmt.ALTER_TABLE_ADD_FOREIGN_KEY,
+            PostgreSQLDDLStmt.ALTER_TABLE_OPTION,
+            PostgreSQLDDLStmt.ALTER_TABLE_RENAME_TABLE,
+            PostgreSQLDDLStmt.REINDEX,
+            PostgreSQLDDLStmt.TRUNCATE_TABLE,
+            PostgreSQLDDLStmt.DROP_INDEX,
+            PostgreSQLDDLStmt.DROP_VIEW
+    };
 
     private final PostgreSQLGlobalState state;
     private boolean initialized;
+    private int nextStatementKindIndex = Randomly.getNotCachedInteger(0, StressStatementKind.values().length);
 
     public PostgreSQLStressOracle(PostgreSQLGlobalState state) {
         this.state = state;
@@ -26,20 +57,22 @@ public final class PostgreSQLStressOracle implements TestOracle {
     @Override
     public void check() throws Exception {
         if (!initialized) {
-            bootstrapDdl();
-            bootstrapDml();
+            ensureBootstrapped();
+            warmUpStatementKinds();
             initialized = true;
         }
 
-        switch (Randomly.fromOptions(StressStatementKind.values())) {
+        StressStatementKind statementKind = StressStatementKind.values()[nextStatementKindIndex];
+        nextStatementKindIndex = (nextStatementKindIndex + 1) % StressStatementKind.values().length;
+        switch (statementKind) {
             case DDL:
-                executeDdl(false);
+                executeDdl(false, false, false);
                 break;
             case DML:
-                executeDml();
+                executeDml(false);
                 break;
             case DQL:
-                executeDql();
+                executeDql(false);
                 break;
             default:
                 throw new AssertionError("Unhandled stress statement kind");
@@ -53,7 +86,7 @@ public final class PostgreSQLStressOracle implements TestOracle {
             if (attempts++ >= MAX_BOOTSTRAP_ATTEMPTS) {
                 throw new AssertionError("Unable to satisfy the requested successful DDL bootstrap count");
             }
-            if (executeDdl(successCount == 0)) {
+            if (executeDdl(successCount == 0, true, true)) {
                 successCount++;
             }
         }
@@ -61,30 +94,40 @@ public final class PostgreSQLStressOracle implements TestOracle {
 
     private void bootstrapDml() throws Exception {
         int successCount = 0;
+        int maxAttempts = Math.max(MAX_BOOTSTRAP_ATTEMPTS,
+                state.getOptions().getDmlCount() * state.getOptions().getNrStatementRetryCount());
         int attempts = 0;
         while (successCount < state.getOptions().getDmlCount()) {
-            if (attempts++ >= MAX_BOOTSTRAP_ATTEMPTS) {
+            if (attempts++ >= maxAttempts) {
                 throw new AssertionError("Unable to satisfy the requested successful DML bootstrap count");
             }
-            if (executeDml()) {
+            if (executeDml(true)) {
                 successCount++;
             }
         }
     }
 
-    private boolean executeDdl(boolean forceCreateTable) throws Exception {
+    private boolean executeDdl(boolean forceCreateTable, boolean requireSuccess, boolean bootstrapPhase) throws Exception {
         PostgreSQLDDLStmt statementKind = forceCreateTable ? PostgreSQLDDLStmt.CREATE_TABLE
-                : Randomly.fromOptions(PostgreSQLDDLStmt.values());
+                : (bootstrapPhase ? chooseBootstrapDdlStmt() : Randomly.fromOptions(PostgreSQLDDLStmt.values()));
         SQLQueryAdapter query = generateDdlQuery(statementKind);
-        return query != null && executeStatement(query);
+        if (query == null) {
+            return false;
+        }
+        boolean success = executeStatement(query);
+        return requireSuccess ? success : true;
     }
 
-    private boolean executeDml() throws Exception {
+    private boolean executeDml(boolean requireSuccess) throws Exception {
         SQLQueryAdapter query = generateDmlQuery();
-        return query != null && executeStatement(query);
+        if (query == null) {
+            return false;
+        }
+        boolean success = executeStatement(query);
+        return requireSuccess ? success : true;
     }
 
-    private boolean executeDql() throws Exception {
+    private boolean executeDql(boolean requireSuccess) throws Exception {
         SQLQueryAdapter query = generateSelectQuery();
         if (query == null) {
             return false;
@@ -92,7 +135,7 @@ public final class PostgreSQLStressOracle implements TestOracle {
         state.getLogger().writeCurrent(query.getQueryString());
         state.getState().logStatement(query);
         try (DBRadarResultSet ignored = query.executeAndGet(state.getConnection(), false)) {
-            return ignored != null;
+            return requireSuccess ? ignored != null : true;
         }
     }
 
@@ -139,6 +182,66 @@ public final class PostgreSQLStressOracle implements TestOracle {
     @Override
     public String getOracleName() {
         return "Stress";
+    }
+
+    public static void resetSharedBootstrapTracking() {
+        BOOTSTRAPPED_SHARED_DATABASES.clear();
+        SHARED_BOOTSTRAP_LOCKS.clear();
+    }
+
+    private void ensureBootstrapped() throws Exception {
+        if (!state.getDbmsSpecificOptions().useSharedStressTopology()) {
+            bootstrapDdl();
+            bootstrapDml();
+            return;
+        }
+
+        String databaseName = state.getDatabaseName();
+        Object lock = SHARED_BOOTSTRAP_LOCKS.computeIfAbsent(databaseName, key -> new Object());
+        synchronized (lock) {
+            if (!BOOTSTRAPPED_SHARED_DATABASES.contains(databaseName)) {
+                bootstrapDdl();
+                bootstrapDml();
+                BOOTSTRAPPED_SHARED_DATABASES.add(databaseName);
+            }
+        }
+        state.updateSchema();
+    }
+
+    private void warmUpStatementKinds() throws Exception {
+        for (StressStatementKind statementKind : StressStatementKind.values()) {
+            boolean attempted = false;
+            for (int attempt = 0; attempt < MAX_BOOTSTRAP_ATTEMPTS && !attempted; attempt++) {
+                switch (statementKind) {
+                    case DDL:
+                        attempted = executeDdl(false, false, true);
+                        break;
+                    case DML:
+                        attempted = executeDml(false);
+                        break;
+                    case DQL:
+                        attempted = executeDql(false);
+                        break;
+                    default:
+                        throw new AssertionError("Unhandled stress statement kind");
+                }
+            }
+            if (!attempted) {
+                throw new AssertionError("Unable to emit a " + statementKind + " statement during stress warm-up");
+            }
+        }
+    }
+
+    private PostgreSQLDDLStmt chooseBootstrapDdlStmt() {
+        if (state.getSchema().getDatabaseTablesWithoutViews().isEmpty()) {
+            return PostgreSQLDDLStmt.CREATE_TABLE;
+        }
+
+        if (state.getSchema().getDatabaseTablesWithoutViews().size() <= 1) {
+            return Randomly.fromOptions(SAFE_BOOTSTRAP_DDL);
+        }
+
+        return Randomly.fromOptions(PostgreSQLDDLStmt.values());
     }
 
     private enum StressStatementKind {
