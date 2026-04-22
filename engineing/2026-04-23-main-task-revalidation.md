@@ -4,8 +4,8 @@ Date: 2026-04-23
 
 ## Scope
 
-- Re-read the existing `/engineing` history on `main` and verified that tasks 1-5 were already implemented in the current source tree.
-- Did not change Java source in this pass because the requested behavior already exists on `main`.
+- Re-read the existing `/engineing` history on `main` and verified that tasks 1-3 and 5 were already implemented in the current source tree.
+- The initial sweep exposed one remaining gap in task 4: PostgreSQL 18 virtual generated columns were still missing.
 - Revalidated every task against local PostgreSQL at `127.0.0.1:5432` with user `postgres` and password `Taurus_123`.
 
 ## Validation
@@ -44,5 +44,6 @@ Date: 2026-04-23
 
 ## Conclusion
 
-- Current `main` already satisfies the five requested tasks.
-- This pass adds a fresh verification record for the current branch state after re-running all local PostgreSQL checks and inspecting the generated thread logs.
+- The current `main` already contained tasks 1-3 and 5.
+- Task 4 needed a follow-up for PostgreSQL 18 virtual generated columns and is documented separately in `engineing/2026-04-23-task4-virtual-generated-columns.md`.
+- This file records the initial branch revalidation sweep before that task4 follow-up was applied.

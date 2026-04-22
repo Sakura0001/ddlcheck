@@ -36,6 +36,7 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
     private List<String> collates = Collections.emptyList();
     private List<String> opClasses = Collections.emptyList();
     private List<String> tableAccessMethods = Collections.emptyList();
+    private int serverVersionNum;
     // store and allow filtering by function volatility classifications
     private final Map<String, Character> functionsAndTypes = new HashMap<>();
     private List<Character> allowedFunctionTypes = Arrays.asList(IMMUTABLE, STABLE, VOLATILE);
@@ -81,8 +82,19 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
             this.operators = getOperators(getConnection());
             this.collates = getCollnames(getConnection());
             this.tableAccessMethods = getTableAccessMethods(getConnection());
+            this.serverVersionNum = getServerVersionNum(getConnection());
         } catch (SQLException e) {
             throw new AssertionError(e);
+        }
+    }
+
+    private int getServerVersionNum(SQLConnection con) throws SQLException {
+        try (Statement s = con.createStatement();
+             ResultSet rs = s.executeQuery("SHOW server_version_num")) {
+            if (!rs.next()) {
+                throw new SQLException("SHOW server_version_num returned no rows");
+            }
+            return rs.getInt(1);
         }
     }
 
@@ -168,6 +180,10 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
 
     public String getRandomTableAccessMethod() {
         return Randomly.fromList(tableAccessMethods);
+    }
+
+    public int getServerVersionNum() {
+        return serverVersionNum;
     }
 
     public void addFunctionAndType(String functionName, Character functionType) {

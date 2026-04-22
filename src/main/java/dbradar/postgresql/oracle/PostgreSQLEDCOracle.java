@@ -27,7 +27,7 @@ import java.util.Map;
 public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
 
     private static final int MAX_BOOTSTRAP_GENERATION_ATTEMPTS = 1000;
-    private PostgreSQLGeneratedColumnSupport.GeneratedColumnScenario bootstrapGeneratedColumnScenario;
+    private List<PostgreSQLGeneratedColumnSupport.GeneratedColumnScenario> bootstrapGeneratedColumnScenarios = List.of();
     private PostgreSQLTypeCoverageSupport.CoveragePlan typeCoveragePlan;
     private boolean builtInCoverageTableCreated;
     private boolean userDefinedCoverageTableCreated;
@@ -46,7 +46,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
         if (randomDdlTarget > 0) {
             getDDLSequence(ddlSeq, randomDdlTarget);
         }
-        appendGeneratedColumnBootstrapTable(ddlSeq);
+        appendGeneratedColumnBootstrapTables(ddlSeq);
         appendTypeCoverageBootstrapObjects(ddlSeq, targetDdlCount);
     }
 
@@ -57,7 +57,12 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
             return 0;
         }
         int successfulStatements = 0;
-        successfulStatements += executeBootstrapScenario(bootstrapGeneratedColumnScenario);
+        for (PostgreSQLGeneratedColumnSupport.GeneratedColumnScenario scenario : bootstrapGeneratedColumnScenarios) {
+            if (successfulStatements >= targetSuccessfulDml) {
+                break;
+            }
+            successfulStatements += executeBootstrapScenario(scenario);
+        }
         if (successfulStatements < targetSuccessfulDml && builtInCoverageTableCreated) {
             successfulStatements += executeBootstrapScenario(typeCoveragePlan.getBuiltInScenario());
         }
@@ -136,12 +141,14 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
         return Randomly.fromOptions(PostgreSQLDDLStmt.values());
     }
 
-    private void appendGeneratedColumnBootstrapTable(List<String> ddlSeq) throws Exception {
-        bootstrapGeneratedColumnScenario = PostgreSQLGeneratedColumnSupport.createStoredGeneratedTable(genState);
-        try (Statement stmt = genState.getConnection().createStatement()) {
-            stmt.execute(bootstrapGeneratedColumnScenario.getCreateTableQuery().getQueryString());
-            genState.updateSchema();
-            ddlSeq.add(bootstrapGeneratedColumnScenario.getCreateTableQuery().getQueryString());
+    private void appendGeneratedColumnBootstrapTables(List<String> ddlSeq) throws Exception {
+        bootstrapGeneratedColumnScenarios = PostgreSQLGeneratedColumnSupport.createBootstrapScenarios(genState);
+        for (PostgreSQLGeneratedColumnSupport.GeneratedColumnScenario scenario : bootstrapGeneratedColumnScenarios) {
+            try (Statement stmt = genState.getConnection().createStatement()) {
+                stmt.execute(scenario.getCreateTableQuery().getQueryString());
+                genState.updateSchema();
+                ddlSeq.add(scenario.getCreateTableQuery().getQueryString());
+            }
         }
     }
 
@@ -149,19 +156,20 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
         builtInCoverageTableCreated = false;
         userDefinedCoverageTableCreated = false;
         typeCoveragePlan = PostgreSQLTypeCoverageSupport.createCoveragePlan(genState);
+        int remainingBudget = targetDdlCount - bootstrapGeneratedColumnScenarios.size();
 
-        if (targetDdlCount < 2) {
+        if (remainingBudget < 1) {
             return;
         }
         executeBootstrapDdl(typeCoveragePlan.getTypeSetupQuery(), ddlSeq);
 
-        if (targetDdlCount < 3) {
+        if (remainingBudget < 2) {
             return;
         }
         executeBootstrapDdl(typeCoveragePlan.getBuiltInScenario().getCreateTableQuery(), ddlSeq);
         builtInCoverageTableCreated = true;
 
-        if (targetDdlCount < 4) {
+        if (remainingBudget < 3) {
             return;
         }
         executeBootstrapDdl(typeCoveragePlan.getUserDefinedScenario().getCreateTableQuery(), ddlSeq);
@@ -203,7 +211,10 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
     }
 
     private int getMandatoryBootstrapDdlCount(int targetDdlCount) {
-        return Math.min(targetDdlCount, 4);
+        int generatedColumnCount = PostgreSQLGeneratedColumnSupport
+                .getBootstrapGeneratedColumnKinds(genState.getServerVersionNum(), targetDdlCount).size();
+        int typeCoverageCount = Math.min(Math.max(targetDdlCount - generatedColumnCount, 0), 3);
+        return generatedColumnCount + typeCoverageCount;
     }
 
     @Override
@@ -301,7 +312,8 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                             "SELECT c.column_name, "
                                     + "pg_catalog.format_type(a.atttypid, a.atttypmod) AS formatted_type, "
                                     + "c.collation_name, c.column_default, c.is_nullable, c.is_generated, "
-                                    + "c.generation_expression, c.identity_generation "
+                                    + "c.generation_expression, c.identity_generation, "
+                                    + "CASE a.attgenerated WHEN 'v' THEN 'VIRTUAL' WHEN 's' THEN 'STORED' ELSE NULL END AS generated_kind "
                                     + "FROM information_schema.columns c "
                                     + "JOIN pg_class pc ON pc.relname = c.table_name "
                                     + "JOIN pg_namespace pn ON pn.oid = pc.relnamespace AND pn.nspname = c.table_schema "
@@ -321,6 +333,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                         String isGenerated = columnRes.getString("is_generated");
                         String generatedExpression = columnRes.getString("generation_expression");
                         String identityGeneration = columnRes.getString("identity_generation");
+                        String generatedKind = columnRes.getString("generated_kind");
 
                         StringBuilder column = new StringBuilder(columnName);
                         column.append(" ").append(dataType);
@@ -334,7 +347,13 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                             column.append(" ").append("DEFAULT ").append(hasDefault);
                         }
                         if ("ALWAYS".equals(isGenerated)) {
-                            column.append(" ").append("GENERATED ALWAYS AS (").append(generatedExpression).append(") STORED");
+                            PostgreSQLGeneratedColumnSupport.GeneratedColumnKind kind =
+                                    "VIRTUAL".equals(generatedKind)
+                                            ? PostgreSQLGeneratedColumnSupport.GeneratedColumnKind.VIRTUAL
+                                            : PostgreSQLGeneratedColumnSupport.GeneratedColumnKind.STORED;
+                            column.append(" ").append(
+                                    PostgreSQLGeneratedColumnSupport.renderGeneratedColumnClause(generatedExpression,
+                                            kind));
                         }
                         if (identityGeneration != null) {
                             column.append(" ").append("GENERATED ").append(identityGeneration).append(" AS IDENTITY");
