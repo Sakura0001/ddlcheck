@@ -28,6 +28,10 @@ public class PostgreSQLOptions implements DBMSSpecificOptions {
     @Parameter(names = "--stress-topology", description = "Specifies how PostgreSQL stress mode maps threads to databases")
     public PostgreSQLOptions.PostgreSQLStressTopology stressTopology = PostgreSQLOptions.PostgreSQLStressTopology.ISOLATED;
 
+    @Parameter(names = "--stress-threads-per-db",
+            description = "Specifies how many PostgreSQL stress threads should share one database")
+    public int stressThreadsPerDb = -1;
+
     @Parameter(names = "--test-collations", description = "Specifies whether to test different collations", arity = 1)
     public boolean testCollations = true;
 
@@ -70,11 +74,28 @@ public class PostgreSQLOptions implements DBMSSpecificOptions {
     }
 
     public boolean useSharedStressTopology() {
-        return useStress() && stressTopology == PostgreSQLStressTopology.SHARED;
+        return useStress() && (stressThreadsPerDb > 1 || stressTopology == PostgreSQLStressTopology.SHARED);
     }
 
     public PostgreSQLStressTopology getStressTopology() {
         return stressTopology;
+    }
+
+    public int getStressThreadsPerDb() {
+        return stressThreadsPerDb;
+    }
+
+    public int getEffectiveStressThreadsPerDb(int concurrentThreads) {
+        if (concurrentThreads <= 1) {
+            return 1;
+        }
+        if (stressThreadsPerDb > 0) {
+            return Math.min(stressThreadsPerDb, concurrentThreads);
+        }
+        if (stressTopology == PostgreSQLStressTopology.SHARED) {
+            return concurrentThreads;
+        }
+        return 1;
     }
 
     @Override

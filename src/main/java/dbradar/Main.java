@@ -155,8 +155,10 @@ public final class Main {
                                             PostgreSQLOptions postgreSQLOptions, AtomicBoolean someOneFails,
                                             List<Map<Integer, Map<Integer, Integer>>> seqCounterList) {
         if (postgreSQLOptions != null && postgreSQLOptions.useStress()) {
-            if (postgreSQLOptions.getStressTopology() == PostgreSQLOptions.PostgreSQLStressTopology.SHARED) {
-                return submitSharedStressTasks(options, execService, executorFactory, someOneFails, seqCounterList);
+            int threadsPerDb = postgreSQLOptions.getEffectiveStressThreadsPerDb(options.getNumberConcurrentThreads());
+            if (threadsPerDb > 1) {
+                return submitGroupedStressTasks(options, execService, executorFactory, someOneFails, seqCounterList,
+                        threadsPerDb);
             }
             return submitIsolatedStressTasks(options, execService, executorFactory, someOneFails, seqCounterList);
         }
@@ -219,45 +221,53 @@ public final class Main {
         return submittedTaskCount;
     }
 
-    private static int submitSharedStressTasks(MainOptions options, ExecutorService execService,
-                                               DBMSExecutorFactory<?> executorFactory, AtomicBoolean someOneFails,
-                                               List<Map<Integer, Map<Integer, Integer>>> seqCounterList) {
+    private static int submitGroupedStressTasks(MainOptions options, ExecutorService execService,
+                                                DBMSExecutorFactory<?> executorFactory, AtomicBoolean someOneFails,
+                                                List<Map<Integer, Map<Integer, Integer>>> seqCounterList,
+                                                int threadsPerDb) {
         int submittedTaskCount = options.getNumberConcurrentThreads();
-        CyclicBarrier prepareBarrier = new CyclicBarrier(submittedTaskCount);
-        CyclicBarrier finishBarrier = new CyclicBarrier(submittedTaskCount);
-        AtomicReference<Throwable> sharedFailure = new AtomicReference<>();
+        int groupCount = (submittedTaskCount + threadsPerDb - 1) / threadsPerDb;
+        Map<Integer, StressThreadGroupRuntime> groupRuntimes = new HashMap<>();
+        for (int groupIndex = 0; groupIndex < groupCount; groupIndex++) {
+            groupRuntimes.put(groupIndex,
+                    new StressThreadGroupRuntime(getGroupSize(submittedTaskCount, threadsPerDb, groupIndex)));
+        }
 
         for (int taskIndex = 0; taskIndex < submittedTaskCount; taskIndex++) {
             final int workerIndex = taskIndex;
             execService.execute(() -> {
-                String workerName = options.getDatabasePrefix() + "shared-thread" + workerIndex;
+                int groupIndex = getGroupIndex(workerIndex, threadsPerDb);
+                int groupLeader = getGroupLeader(groupIndex, threadsPerDb);
+                StressThreadGroupRuntime groupRuntime = groupRuntimes.get(groupIndex);
+                String workerName = options.getDatabasePrefix() + "g" + groupIndex + "-thread" + workerIndex;
                 Thread.currentThread().setName(workerName);
                 try {
                     int maxNrDbs = options.getMaxGeneratedDatabases();
                     for (int round = 0; round < maxNrDbs || maxNrDbs == -1; round++) {
-                        if (sharedFailure.get() != null) {
+                        if (groupRuntime.failure.get() != null) {
                             someOneFails.set(true);
                             break;
                         }
-                        String databaseName = options.getDatabasePrefix() + round;
-                        if (workerIndex == 0) {
+                        String databaseName = buildGroupedDatabaseName(options.getDatabasePrefix(), round, groupIndex,
+                                groupCount);
+                        if (workerIndex == groupLeader) {
                             DBMSExecutor prepareExecutor = executorFactory.getDBMSExecutor(databaseName,
                                     databaseName + "-prepare", new Randomly(resolveSeed(options, workerIndex, round)),
                                     true, buildSharedObjectPrefix(workerIndex));
                             try {
                                 prepareExecutor.prepareDatabase();
                             } catch (Throwable throwable) {
-                                sharedFailure.compareAndSet(null, throwable);
-                                prepareBarrier.reset();
+                                groupRuntime.failure.compareAndSet(null, throwable);
+                                groupRuntime.prepareBarrier.reset();
                             }
                         }
-                        if (!awaitBarrier(prepareBarrier, sharedFailure.get())) {
+                        if (!awaitBarrier(groupRuntime.prepareBarrier, groupRuntime.failure.get())) {
                             someOneFails.set(true);
                             break;
                         }
-                        if (sharedFailure.get() != null) {
+                        if (groupRuntime.failure.get() != null) {
                             someOneFails.set(true);
-                            finishBarrier.reset();
+                            groupRuntime.finishBarrier.reset();
                             break;
                         }
 
@@ -268,12 +278,12 @@ public final class Main {
                         boolean succeeded = runExecutor(options, executor, seqCounterList);
                         if (!succeeded) {
                             someOneFails.set(true);
-                            sharedFailure.compareAndSet(null, new AssertionError(
-                                    "Shared stress worker " + workerIndex + " failed on " + databaseName));
-                            finishBarrier.reset();
+                            groupRuntime.failure.compareAndSet(null,
+                                    new AssertionError("Stress worker " + workerIndex + " failed on " + databaseName));
+                            groupRuntime.finishBarrier.reset();
                             break;
                         }
-                        if (!awaitBarrier(finishBarrier, sharedFailure.get())) {
+                        if (!awaitBarrier(groupRuntime.finishBarrier, groupRuntime.failure.get())) {
                             someOneFails.set(true);
                             break;
                         }
@@ -358,8 +368,38 @@ public final class Main {
         return databasePrefix + workerIndex + "_" + round;
     }
 
+    private static int getGroupIndex(int workerIndex, int threadsPerDb) {
+        return workerIndex / threadsPerDb;
+    }
+
+    private static int getGroupLeader(int groupIndex, int threadsPerDb) {
+        return groupIndex * threadsPerDb;
+    }
+
+    private static int getGroupSize(int submittedTaskCount, int threadsPerDb, int groupIndex) {
+        return Math.min(threadsPerDb, submittedTaskCount - getGroupLeader(groupIndex, threadsPerDb));
+    }
+
+    private static String buildGroupedDatabaseName(String databasePrefix, int round, int groupIndex, int groupCount) {
+        if (groupCount == 1) {
+            return databasePrefix + round;
+        }
+        return databasePrefix + round + "_g" + groupIndex;
+    }
+
     private static String buildSharedObjectPrefix(int workerIndex) {
         return "thr" + workerIndex + "_";
+    }
+
+    private static final class StressThreadGroupRuntime {
+        private final CyclicBarrier prepareBarrier;
+        private final CyclicBarrier finishBarrier;
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        private StressThreadGroupRuntime(int groupSize) {
+            this.prepareBarrier = new CyclicBarrier(groupSize);
+            this.finishBarrier = new CyclicBarrier(groupSize);
+        }
     }
 
     private static boolean shouldUseSequenceCounters(DBMSExecutor executor) {

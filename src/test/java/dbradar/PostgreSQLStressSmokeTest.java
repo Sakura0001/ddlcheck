@@ -13,6 +13,7 @@ public final class PostgreSQLStressSmokeTest {
     private static final int PORT = 5432;
     private static final String ISOLATED_DATABASE_PREFIX = "task2_isolated_";
     private static final String SHARED_DATABASE_PREFIX = "task2_shared_";
+    private static final String GROUPED_DATABASE_PREFIX = "task2_grouped_";
 
     private PostgreSQLStressSmokeTest() {
     }
@@ -20,6 +21,7 @@ public final class PostgreSQLStressSmokeTest {
     public static void main(String[] args) throws Exception {
         verifiesIsolatedStressMode();
         verifiesSharedStressMode();
+        verifiesGroupedStressMode();
     }
 
     private static void verifiesIsolatedStressMode() throws Exception {
@@ -69,6 +71,38 @@ public final class PostgreSQLStressSmokeTest {
 
         assertStressLog(thread0Log);
         assertStressLog(thread1Log);
+    }
+
+    private static void verifiesGroupedStressMode() throws Exception {
+        int exitCode = Main.executeMain(
+                "--num-threads", "4",
+                "--num-tries", "9",
+                "--num-queries", "30",
+                "--max-generated-databases", "1",
+                "--print-progress-information", "false",
+                "--database-prefix", GROUPED_DATABASE_PREFIX,
+                "--host", HOST,
+                "--port", String.valueOf(PORT),
+                "--username", USERNAME,
+                "--password", PASSWORD,
+                "postgresql", "--oracle", "stress", "--stress-threads-per-db", "2");
+        require(exitCode == 0, "Expected Main.executeMain to succeed in grouped stress mode");
+
+        require(Files.exists(Path.of("logs", "postgresql", GROUPED_DATABASE_PREFIX + "0_g0-thread0-cur.log")),
+                "Expected grouped stress log for thread0");
+        require(Files.exists(Path.of("logs", "postgresql", GROUPED_DATABASE_PREFIX + "0_g0-thread1-cur.log")),
+                "Expected grouped stress log for thread1");
+        require(Files.exists(Path.of("logs", "postgresql", GROUPED_DATABASE_PREFIX + "0_g1-thread2-cur.log")),
+                "Expected grouped stress log for thread2");
+        require(Files.exists(Path.of("logs", "postgresql", GROUPED_DATABASE_PREFIX + "0_g1-thread3-cur.log")),
+                "Expected grouped stress log for thread3");
+        require(countCurrentLogs(GROUPED_DATABASE_PREFIX) == 4,
+                "Grouped stress mode should emit one current log per thread");
+
+        assertStressLog(Path.of("logs", "postgresql", GROUPED_DATABASE_PREFIX + "0_g0-thread0-cur.log"));
+        assertStressLog(Path.of("logs", "postgresql", GROUPED_DATABASE_PREFIX + "0_g0-thread1-cur.log"));
+        assertStressLog(Path.of("logs", "postgresql", GROUPED_DATABASE_PREFIX + "0_g1-thread2-cur.log"));
+        assertStressLog(Path.of("logs", "postgresql", GROUPED_DATABASE_PREFIX + "0_g1-thread3-cur.log"));
     }
 
     private static void assertStressLog(Path logFile) throws Exception {
