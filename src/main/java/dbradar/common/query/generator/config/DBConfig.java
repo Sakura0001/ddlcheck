@@ -48,7 +48,7 @@ public class DBConfig {
     }
 
     private DBConfig loadDefaultConfig() {
-        DBConfig defaultConfig = new DBConfig(DEFAULT_CONFIG_PATH);
+        DBConfig defaultConfig = new DBConfig(ClassLoader.getSystemResource(DEFAULT_CONFIG_PATH).getPath());
         defaultConfig.internalParse();
         return defaultConfig;
     }

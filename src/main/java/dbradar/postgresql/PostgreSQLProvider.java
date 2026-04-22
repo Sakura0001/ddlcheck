@@ -39,11 +39,15 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
 
     public enum PostgreSQLQueryProvider implements QueryProvider {
         CREATE_TABLE("create_table", true),
+        CREATE_PARTITIONED_TABLE("create_partitioned_table", true),
+        CREATE_TABLE_PARTITION("create_table_partition", true),
         CREATE_INDEX("create_index", true),
         CREATE_VIEW("create_view", true),
         SHOW_TABLES("show_tables", false),
         TRUNCATE_TABLE("truncate", true),
         ALTER_TABLE("alter_table", true),
+        ALTER_TABLE_ATTACH_PARTITION("alter_table_attach_partition", true),
+        ALTER_TABLE_DETACH_PARTITION("alter_table_detach_partition", true),
         ALTER_TABLE_ADD_COLUMN("alter_table_add_column", true),
         ALTER_TABLE_DROP_COLUMN("alter_table_drop_column", true),
         ALTER_TABLE_ALTER_COLUMN_TYPE("alter_table_alter_column_type", true),
@@ -107,11 +111,15 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
 
         Map<QueryProvider, Integer> queryWeights = new HashMap<>();
         queryWeights.put(PostgreSQLQueryProvider.CREATE_TABLE, 0);
+        queryWeights.put(PostgreSQLQueryProvider.CREATE_PARTITIONED_TABLE, 2);
+        queryWeights.put(PostgreSQLQueryProvider.CREATE_TABLE_PARTITION, 2);
         queryWeights.put(PostgreSQLQueryProvider.CREATE_INDEX, 5);
         queryWeights.put(PostgreSQLQueryProvider.CREATE_VIEW, 5);
         queryWeights.put(PostgreSQLQueryProvider.SHOW_TABLES, 2);
         queryWeights.put(PostgreSQLQueryProvider.TRUNCATE_TABLE, 2);
         queryWeights.put(PostgreSQLQueryProvider.ALTER_TABLE, 5);
+        queryWeights.put(PostgreSQLQueryProvider.ALTER_TABLE_ATTACH_PARTITION, 1);
+        queryWeights.put(PostgreSQLQueryProvider.ALTER_TABLE_DETACH_PARTITION, 1);
         queryWeights.put(PostgreSQLQueryProvider.REINDEX, 5);
         queryWeights.put(PostgreSQLQueryProvider.DROP_INDEX, 5);
         queryWeights.put(PostgreSQLQueryProvider.DROP_VIEW, 5);
@@ -131,8 +139,12 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
 
     public enum PostgreSQLDDLStmt {
         CREATE_TABLE(PostgreSQLQueryProvider.CREATE_TABLE),
+        CREATE_PARTITIONED_TABLE(PostgreSQLQueryProvider.CREATE_PARTITIONED_TABLE),
+        CREATE_TABLE_PARTITION(PostgreSQLQueryProvider.CREATE_TABLE_PARTITION),
         CREATE_INDEX(PostgreSQLQueryProvider.CREATE_INDEX),
         CREATE_VIEW(PostgreSQLQueryProvider.CREATE_VIEW),
+        ALTER_TABLE_ATTACH_PARTITION(PostgreSQLQueryProvider.ALTER_TABLE_ATTACH_PARTITION),
+        ALTER_TABLE_DETACH_PARTITION(PostgreSQLQueryProvider.ALTER_TABLE_DETACH_PARTITION),
         ALTER_TABLE_ADD_COLUMN(PostgreSQLQueryProvider.ALTER_TABLE_ADD_COLUMN),
         ALTER_TABLE_DROP_COLUMN(PostgreSQLQueryProvider.ALTER_TABLE_DROP_COLUMN),
         ALTER_TABLE_ALTER_COLUMN_TYPE(PostgreSQLQueryProvider.ALTER_TABLE_ALTER_COLUMN_TYPE),

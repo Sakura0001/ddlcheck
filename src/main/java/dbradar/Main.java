@@ -19,13 +19,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.JCommander.Builder;
-import dbradar.cockroachdb.CockroachDBProvider;
-import dbradar.mysql.MySQLOptions;
-import dbradar.mysql.MySQLProvider;
-import dbradar.mysql.oracle.MySQLStressOracle;
 import dbradar.postgresql.PostgreSQLProvider;
-import dbradar.sqlite3.SQLite3Provider;
-import dbradar.tidb.TiDBProvider;
 
 public final class Main {
 
@@ -52,14 +46,6 @@ public final class Main {
     }
 
     public static int executeMain(String... args) throws AssertionError {
-        nrQueries.set(0);
-        nrDatabases.set(0);
-        nrSuccessfulActions.set(0);
-        nrUnsuccessfulActions.set(0);
-        threadsShutdown.set(0);
-        MySQLStressOracle.resetGlobalSuccessRateLogging();
-        StateLogger.resetInitializedProviders();
-
         List<DatabaseProvider> providers = getDBMSProviders();
         Map<String, DBMSExecutorFactory<?>> nameToProvider = new HashMap<>();
         MainOptions options = new MainOptions();
@@ -75,18 +61,6 @@ public final class Main {
 
         if (jc.getParsedCommand() == null || options.isHelp()) {
             jc.usage();
-            return options.getErrorExitCode();
-        }
-        DBMSExecutorFactory<?> executorFactory = nameToProvider.get(jc.getParsedCommand());
-        boolean roundBasedStress = isRoundBasedMySQLStress(executorFactory.getCommand());
-        if (!roundBasedStress && options.getTotalNumberTries() <= 0) {
-            System.err.printf("Invalid --num-tries value: %d. It must be greater than 0.%n",
-                    options.getTotalNumberTries());
-            return options.getErrorExitCode();
-        }
-        final int taskCount = roundBasedStress ? options.getNumberConcurrentThreads() : options.getTotalNumberTries();
-        if (taskCount <= 0) {
-            System.err.printf("Invalid task count: %d. It must be greater than 0.%n", taskCount);
             return options.getErrorExitCode();
         }
 
@@ -120,6 +94,7 @@ public final class Main {
         }
 
         ExecutorService execService = Executors.newFixedThreadPool(options.getNumberConcurrentThreads());
+        DBMSExecutorFactory<?> executorFactory = nameToProvider.get(jc.getParsedCommand());
 
         if (options.performConnectionTest()) {
             try {
@@ -135,7 +110,7 @@ public final class Main {
         final AtomicBoolean someOneFails = new AtomicBoolean(false);
         final List<Map<Integer, Map<Integer, Integer>>> seqCounterList = new ArrayList<>();
 
-        for (int i = 0; i < taskCount; i++) {
+        for (int i = 0; i < options.getTotalNumberTries(); i++) {
             final String databaseName = options.getDatabasePrefix() + i;
             final long seed;
             if (options.getRandomSeed() == -1) {
@@ -154,7 +129,7 @@ public final class Main {
                 private void runThread(final String databaseName) {
                     Randomly r = new Randomly(seed);
                     try {
-                        int maxNrDbs = roundBasedStress ? 1 : options.getMaxGeneratedDatabases();
+                        int maxNrDbs = options.getMaxGeneratedDatabases();
                         // run without a limit if maxNrDbs == -1
                         for (int i = 0; i < maxNrDbs || maxNrDbs == -1; i++) {
                             Boolean continueRunning = run(options, execService, executorFactory, r, databaseName);
@@ -165,7 +140,7 @@ public final class Main {
                         }
                     } finally {
                         threadsShutdown.addAndGet(1);
-                        if (threadsShutdown.get() == taskCount) {
+                        if (threadsShutdown.get() == options.getTotalNumberTries()) {
                             execService.shutdown();
                         }
                     }
@@ -209,15 +184,9 @@ public final class Main {
             }
         } catch (InterruptedException e) {
             e.printStackTrace();
-        } finally {
-            execService.shutdownNow();
         }
 
         return someOneFails.get() ? options.getErrorExitCode() : 0;
-    }
-
-    private static boolean isRoundBasedMySQLStress(DBMSSpecificOptions command) {
-        return command instanceof MySQLOptions && ((MySQLOptions) command).useStress();
     }
 
     /**
@@ -232,11 +201,7 @@ public final class Main {
      */
     static List<DatabaseProvider> getDBMSProviders() {
         List<DatabaseProvider> providers = new ArrayList<>();
-        providers.add(new CockroachDBProvider());
-        providers.add(new MySQLProvider());
         providers.add(new PostgreSQLProvider());
-        providers.add(new SQLite3Provider());
-        providers.add(new TiDBProvider());
 
         return providers;
     }

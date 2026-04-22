@@ -391,7 +391,7 @@ public class KeyFuncManager extends AbstractKeyFuncManager {
                 ASTNode pNode = parent;
                 while (pNode != null) {
                     String symbol = pNode.getToken().getValue();
-                    if (symbol.equals("generated_column_definition")) {
+                    if (symbol.equals("generated_constraint")) { // generated_constraint is the symbol in grammar
                         // The current column definition is not done
                         columns.remove(lastColumn);
                         break;
@@ -513,7 +513,6 @@ public class KeyFuncManager extends AbstractKeyFuncManager {
             } else {
                 List<AbstractTableColumn<?, ?>> candidateCols = columns.stream().filter(c -> !c.isGenerated())
                         .collect(Collectors.toList());
-                currentContext.setProperty("insertable_columns", new ArrayList<>(candidateCols));
                 for (int i = 0; i < candidateCols.size(); i++) {
                     AbstractTableColumn<?, ?> col = candidateCols.get(i);
                     currentContext.addReturnedColumn(col);
@@ -569,7 +568,6 @@ public class KeyFuncManager extends AbstractKeyFuncManager {
         public void generateAST(ASTNode parent) {
             String aliasName = "ca" + columnAlias++;
             currentContext.addReturnedColumn(new AliasTableColumn<>(aliasName, null, null));
-            currentContext.addColumnAlias(aliasName);
             ASTNode aliasNode = new ASTNode(new Token(TokenType.TERMINAL, aliasName));
             parent.addChild(aliasNode);
         }

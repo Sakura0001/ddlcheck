@@ -1,10 +1,8 @@
 package dbradar;
 
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.io.InputStream;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -147,7 +145,7 @@ public abstract class GlobalState {
                 throw new RuntimeException(
                         String.format("GlobalState: grammar file %s does not exist", grammarPath));
             }
-            String grammarStr = readClasspathResource(grammarPath);
+            String grammarStr = Files.readString(Paths.get(fileURL.toURI()));
             GrammarParser grammarParser = new GrammarParser(grammarStr);
             Grammar grammar = grammarParser.parse();
             if (grammar == null) {
@@ -156,17 +154,6 @@ public abstract class GlobalState {
             return grammar;
         } catch (Exception e) {
             throw new RuntimeException("GlobalState: Fail to parse grammar");
-        }
-    }
-
-    static String readClasspathResource(String resourcePath) {
-        try (InputStream in = GlobalState.class.getClassLoader().getResourceAsStream(resourcePath)) {
-            if (in == null) {
-                throw new RuntimeException(String.format("GlobalState: resource %s does not exist", resourcePath));
-            }
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new RuntimeException("GlobalState: Failed to read classpath resource " + resourcePath, e);
         }
     }
 

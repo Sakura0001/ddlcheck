@@ -23,7 +23,6 @@ public class QueryContext {
     // Context information for SELECT
     private List<AbstractTableColumn<?, ?>> currentColumns = new ArrayList<>();
     private Queue<AbstractTableColumn<?, ?>> returnedColumns = new LinkedList<>();
-    private List<String> availableColumnAliases = new ArrayList<>();
 
     private List<AbstractTableColumn<?, ?>> selectedCols = new ArrayList<>();
 
@@ -105,14 +104,6 @@ public class QueryContext {
 
     public Queue<AbstractTableColumn<?, ?>> getReturnedColumns() {
         return returnedColumns;
-    }
-
-    public void addColumnAlias(String alias) {
-        availableColumnAliases.add(alias);
-    }
-
-    public List<String> getAvailableColumnAliases() {
-        return availableColumnAliases;
     }
 
     public void addFiller(ColumnReferenceFiller filler) {
