@@ -23,6 +23,7 @@ public abstract class GlobalState {
     private StateToReproduce state;
     private QueryManager manager;
     private String databaseName;
+    private int threadId = -1;
     private String generatedObjectNamePrefix = "";
     private AbstractSchema<?, ?, ?> schema;
 
@@ -96,6 +97,14 @@ public abstract class GlobalState {
 
     public void setDatabaseName(String databaseName) {
         this.databaseName = databaseName;
+    }
+
+    public int getThreadId() {
+        return threadId;
+    }
+
+    public void setThreadId(int threadId) {
+        this.threadId = threadId;
     }
 
     public String getGeneratedObjectNamePrefix() {

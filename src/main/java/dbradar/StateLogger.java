@@ -5,6 +5,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -12,6 +13,8 @@ import dbradar.common.log.Loggable;
 import dbradar.common.query.Query;
 
 public final class StateLogger {
+
+    private static final String GLOBAL_EXECUTION_LOG = "global-execution.log";
 
     private final File loggerFile;
     private File curFile;
@@ -21,6 +24,8 @@ public final class StateLogger {
     private FileWriter queryPlanFileWriter;
 
     private static final List<String> INITIALIZED_PROVIDER_NAMES = new ArrayList<>();
+    private static final Object GLOBAL_LOG_LOCK = new Object();
+    private static FileWriter globalExecutionLogWriter;
     private final boolean logEachSelect;
     private final boolean logQueryPlan;
 
@@ -67,6 +72,66 @@ public final class StateLogger {
         this.databaseProvider = provider;
     }
 
+    public static void initializeGlobalExecutionLog(DatabaseProvider provider, MainOptions options) {
+        synchronized (GLOBAL_LOG_LOCK) {
+            closeGlobalExecutionLog();
+            File dir = new File(Main.LOG_DIRECTORY, provider.getDBMSName());
+            if (!dir.exists()) {
+                try {
+                    Files.createDirectories(dir.toPath());
+                } catch (IOException e) {
+                    throw new AssertionError(e);
+                }
+            }
+            Path globalLogPath = dir.toPath().resolve(GLOBAL_EXECUTION_LOG);
+            try {
+                Files.deleteIfExists(globalLogPath);
+            } catch (IOException e) {
+                throw new AssertionError(e);
+            }
+            if (!options.logGlobalExecution()) {
+                return;
+            }
+            try {
+                globalExecutionLogWriter = new FileWriter(globalLogPath.toFile(), false);
+            } catch (IOException e) {
+                throw new AssertionError(e);
+            }
+        }
+    }
+
+    public static void logGlobalExecutionEvent(int threadId, String databaseName, String sql, boolean success,
+                                               String errorMessage) {
+        synchronized (GLOBAL_LOG_LOCK) {
+            if (globalExecutionLogWriter == null) {
+                return;
+            }
+            try {
+                globalExecutionLogWriter.write(formatGlobalExecutionEvent(threadId, databaseName, sql, success,
+                        errorMessage));
+                globalExecutionLogWriter.write(System.lineSeparator());
+                globalExecutionLogWriter.flush();
+            } catch (IOException e) {
+                throw new AssertionError(e);
+            }
+        }
+    }
+
+    public static void closeGlobalExecutionLog() {
+        synchronized (GLOBAL_LOG_LOCK) {
+            if (globalExecutionLogWriter == null) {
+                return;
+            }
+            try {
+                globalExecutionLogWriter.close();
+            } catch (IOException e) {
+                throw new AssertionError(e);
+            } finally {
+                globalExecutionLogWriter = null;
+            }
+        }
+    }
+
     private void ensureExistsAndIsEmpty(File dir, DatabaseProvider provider) {
         if (INITIALIZED_PROVIDER_NAMES.contains(provider.getDBMSName())) {
             return;
@@ -82,7 +147,7 @@ public final class StateLogger {
             File[] listFiles = dir.listFiles();
             assert listFiles != null : "directory was just created, so it should exist";
             for (File file : listFiles) {
-                if (!file.isDirectory()) {
+                if (!file.isDirectory() && !GLOBAL_EXECUTION_LOG.equals(file.getName())) {
                     file.delete();
                 }
             }
@@ -227,5 +292,23 @@ public final class StateLogger {
         result = result.replaceAll("v[0-9]+", "v0"); // Avoid duplicate views
         result = result.replaceAll("i[0-9]+", "i0"); // Avoid duplicate indexes
         return result + "\n";
+    }
+
+    private static String formatGlobalExecutionEvent(int threadId, String databaseName, String sql, boolean success,
+                                                     String errorMessage) {
+        String normalizedError = success ? "-" : sanitizeLine(errorMessage);
+        return String.format("thread=%d db=%s status=%s error=%s sql=%s",
+                threadId,
+                sanitizeLine(databaseName),
+                success ? "SUCCESS" : "FAIL",
+                normalizedError,
+                sanitizeLine(sql));
+    }
+
+    private static String sanitizeLine(String value) {
+        if (value == null || value.isBlank()) {
+            return "-";
+        }
+        return value.replace("\r", " ").replace("\n", " ").trim().replaceAll("\\s+", " ");
     }
 }

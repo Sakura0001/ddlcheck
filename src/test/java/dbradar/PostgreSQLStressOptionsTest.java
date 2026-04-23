@@ -14,6 +14,7 @@ public final class PostgreSQLStressOptionsTest {
         verifiesStressOracleParsing();
         verifiesStressTopologyParsing();
         verifiesStressThreadsPerDbParsing();
+        verifiesGlobalExecutionLoggingParsing();
         verifiesEffectiveStressThreadsPerDbFallbacks();
         verifiesEffectiveStressThreadsPerDbNormalization();
     }
@@ -38,6 +39,12 @@ public final class PostgreSQLStressOptionsTest {
         PostgreSQLOptions pgOptions = parseOptions("--oracle", "stress", "--stress-threads-per-db", "4");
         require(pgOptions.getStressThreadsPerDb() == 4,
                 "Expected --stress-threads-per-db 4 to be parsed");
+    }
+
+    private static void verifiesGlobalExecutionLoggingParsing() {
+        MainOptions options = parseMainOptions("--log-global-execution", "true");
+        require(options.logGlobalExecution(),
+                "Expected --log-global-execution true to enable global execution logging");
     }
 
     private static void verifiesEffectiveStressThreadsPerDbFallbacks() {
@@ -65,6 +72,23 @@ public final class PostgreSQLStressOptionsTest {
     }
 
     private static PostgreSQLOptions parseOptions(String... postgresqlArgs) {
+        ParsedOptions parsed = parse(postgresqlArgs);
+        return parsed.postgreSQLOptions;
+    }
+
+    private static MainOptions parseMainOptions(String... postgresqlArgs) {
+        MainOptions options = new MainOptions();
+        DBMSExecutorFactory<?> executorFactory = new DBMSExecutorFactory<>(new dbradar.postgresql.PostgreSQLProvider(),
+                options);
+        JCommander.newBuilder()
+                .addObject(options)
+                .addCommand("postgresql", executorFactory.getCommand())
+                .build()
+                .parse(concat(postgresqlArgs, new String[]{"postgresql"}));
+        return options;
+    }
+
+    private static ParsedOptions parse(String... postgresqlArgs) {
         MainOptions options = new MainOptions();
         DBMSExecutorFactory<?> executorFactory = new DBMSExecutorFactory<>(new dbradar.postgresql.PostgreSQLProvider(),
                 options);
@@ -73,7 +97,17 @@ public final class PostgreSQLStressOptionsTest {
                 .addCommand("postgresql", executorFactory.getCommand())
                 .build()
                 .parse(concat(new String[]{"postgresql"}, postgresqlArgs));
-        return (PostgreSQLOptions) executorFactory.getCommand();
+        return new ParsedOptions(options, (PostgreSQLOptions) executorFactory.getCommand());
+    }
+
+    private static final class ParsedOptions {
+        private final MainOptions mainOptions;
+        private final PostgreSQLOptions postgreSQLOptions;
+
+        private ParsedOptions(MainOptions mainOptions, PostgreSQLOptions postgreSQLOptions) {
+            this.mainOptions = mainOptions;
+            this.postgreSQLOptions = postgreSQLOptions;
+        }
     }
 
     private static String[] concat(String[] left, String[] right) {

@@ -101,6 +101,7 @@ public final class Main {
 
         ExecutorService execService = Executors.newFixedThreadPool(options.getNumberConcurrentThreads());
         DBMSExecutorFactory<?> executorFactory = nameToProvider.get(jc.getParsedCommand());
+        StateLogger.initializeGlobalExecutionLog(executorFactory.getProvider(), options);
         PostgreSQLOptions postgreSQLOptions = executorFactory.getCommand() instanceof PostgreSQLOptions
                 ? (PostgreSQLOptions) executorFactory.getCommand()
                 : null;
@@ -128,6 +129,8 @@ public final class Main {
             }
         } catch (InterruptedException e) {
             e.printStackTrace();
+        } finally {
+            StateLogger.closeGlobalExecutionLog();
         }
 
         return someOneFails.get() ? options.getErrorExitCode() : 0;
@@ -177,8 +180,10 @@ public final class Main {
                 try {
                     int maxNrDbs = options.getMaxGeneratedDatabases();
                     for (int round = 0; round < maxNrDbs || maxNrDbs == -1; round++) {
+                        int threadId = workerIndex + 1;
                         Randomly randomly = new Randomly(resolveSeed(options, workerIndex, round));
                         DBMSExecutor executor = executorFactory.getDBMSExecutor(databaseName, randomly);
+                        executor.setThreadId(threadId);
                         if (!runExecutor(options, executor, seqCounterList)) {
                             someOneFails.set(true);
                             break;
@@ -204,10 +209,12 @@ public final class Main {
                 try {
                     int maxNrDbs = options.getMaxGeneratedDatabases();
                     for (int round = 0; round < maxNrDbs || maxNrDbs == -1; round++) {
+                        int threadId = workerIndex + 1;
                         String databaseName = buildIsolatedDatabaseName(options.getDatabasePrefix(), workerIndex, round);
                         Randomly randomly = new Randomly(resolveSeed(options, workerIndex, round));
-                        DBMSExecutor executor = executorFactory.getDBMSExecutor(databaseName, databaseName, randomly,
-                                true, "");
+                        DBMSExecutor executor = executorFactory.getDBMSExecutor(databaseName,
+                                options.getDatabasePrefix() + threadId, randomly, true, "");
+                        executor.setThreadId(threadId);
                         if (!runExecutor(options, executor, seqCounterList)) {
                             someOneFails.set(true);
                             break;
@@ -238,6 +245,7 @@ public final class Main {
             execService.execute(() -> {
                 int groupIndex = getGroupIndex(workerIndex, threadsPerDb);
                 int groupLeader = getGroupLeader(groupIndex, threadsPerDb);
+                int threadId = workerIndex + 1;
                 StressThreadGroupRuntime groupRuntime = groupRuntimes.get(groupIndex);
                 String workerName = options.getDatabasePrefix() + "g" + groupIndex + "-thread" + workerIndex;
                 Thread.currentThread().setName(workerName);
@@ -254,6 +262,7 @@ public final class Main {
                             DBMSExecutor prepareExecutor = executorFactory.getDBMSExecutor(databaseName,
                                     databaseName + "-prepare", new Randomly(resolveSeed(options, workerIndex, round)),
                                     true, buildSharedObjectPrefix(workerIndex));
+                            prepareExecutor.setThreadId(threadId);
                             try {
                                 prepareExecutor.prepareDatabase();
                             } catch (Throwable throwable) {
@@ -272,9 +281,10 @@ public final class Main {
                         }
 
                         DBMSExecutor executor = executorFactory.getDBMSExecutor(databaseName,
-                                databaseName + "-thread" + workerIndex,
+                                options.getDatabasePrefix() + threadId,
                                 new Randomly(resolveSeed(options, workerIndex, round)),
                                 false, buildSharedObjectPrefix(workerIndex));
+                        executor.setThreadId(threadId);
                         boolean succeeded = runExecutor(options, executor, seqCounterList);
                         if (!succeeded) {
                             someOneFails.set(true);

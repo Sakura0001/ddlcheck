@@ -91,10 +91,10 @@ public final class PostgreSQLGeneratedColumnSmokeTest {
                 "postgresql", "--oracle", "stress", "--stress-threads-per-db", "2");
         require(exitCode == 0, "Expected generated-column stress run to succeed");
 
-        Path group0Thread0Log = Path.of("logs", "postgresql", STRESS_PREFIX + "0_g0-thread0-cur.log");
-        Path group0Thread1Log = Path.of("logs", "postgresql", STRESS_PREFIX + "0_g0-thread1-cur.log");
-        Path group1Thread2Log = Path.of("logs", "postgresql", STRESS_PREFIX + "0_g1-thread2-cur.log");
-        Path group1Thread3Log = Path.of("logs", "postgresql", STRESS_PREFIX + "0_g1-thread3-cur.log");
+        Path group0Thread0Log = Path.of("logs", "postgresql", STRESS_PREFIX + "1-cur.log");
+        Path group0Thread1Log = Path.of("logs", "postgresql", STRESS_PREFIX + "2-cur.log");
+        Path group1Thread2Log = Path.of("logs", "postgresql", STRESS_PREFIX + "3-cur.log");
+        Path group1Thread3Log = Path.of("logs", "postgresql", STRESS_PREFIX + "4-cur.log");
         require(Files.exists(group0Thread0Log), "Expected grouped stress log: " + group0Thread0Log);
         require(Files.exists(group0Thread1Log), "Expected grouped stress log: " + group0Thread1Log);
         require(Files.exists(group1Thread2Log), "Expected grouped stress log: " + group1Thread2Log);

@@ -19,6 +19,7 @@ import dbradar.MainOptions;
 import dbradar.Randomly;
 import dbradar.SQLConnection;
 import dbradar.SQLGlobalState;
+import dbradar.StateLogger;
 
 public class PostgreSQLGlobalState extends SQLGlobalState {
 
@@ -71,7 +72,7 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
     public SQLConnection createConnection(String host, int port, String username, String password, String databaseName) throws SQLException {
         String url = String.format("jdbc:postgresql://%s:%d/%s", host, port, databaseName);
         Connection conn = DriverManager.getConnection(url, username, password);
-        return new SQLConnection(conn);
+        return new SQLConnection(conn, databaseName, getThreadId(), getOptions().logGlobalExecution());
     }
 
     @Override
@@ -263,14 +264,14 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
     public SQLConnection createDatabase(String host, int port, String username, String password, String databaseName, String createDatabaseCommand) throws SQLException {
         String url = String.format("jdbc:postgresql://%s:%d/postgres", host, port);
         try (Connection conn = DriverManager.getConnection(url, username, password); Statement statement = conn.createStatement()) {
-            statement.execute("DROP DATABASE IF EXISTS " + databaseName);
-            statement.execute(createDatabaseCommand);
+            executeDatabaseLifecycleStatement(statement, databaseName, "DROP DATABASE IF EXISTS " + databaseName);
+            executeDatabaseLifecycleStatement(statement, databaseName, createDatabaseCommand);
         }
 
         url = String.format("jdbc:postgresql://%s:%d/%s", host, port, databaseName);
         Connection conn = DriverManager.getConnection(url, username, password);
 
-        return new SQLConnection(conn);
+        return new SQLConnection(conn, databaseName, getThreadId(), getOptions().logGlobalExecution());
     }
 
     private SQLConnection createSharedDatabase(String host, int port, String username, String password,
@@ -281,8 +282,8 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
                 String url = String.format("jdbc:postgresql://%s:%d/postgres", host, port);
                 try (Connection conn = DriverManager.getConnection(url, username, password);
                      Statement statement = conn.createStatement()) {
-                    statement.execute("DROP DATABASE IF EXISTS " + databaseName);
-                    statement.execute(createDatabaseCommand);
+                    executeDatabaseLifecycleStatement(statement, databaseName, "DROP DATABASE IF EXISTS " + databaseName);
+                    executeDatabaseLifecycleStatement(statement, databaseName, createDatabaseCommand);
                 }
                 INITIALIZED_SHARED_DATABASES.add(databaseName);
             }
@@ -311,6 +312,17 @@ public class PostgreSQLGlobalState extends SQLGlobalState {
             sb.append("WITH ENCODING 'UTF8' TEMPLATE template0");
         }
         return sb.toString();
+    }
+
+    private void executeDatabaseLifecycleStatement(Statement statement, String databaseName, String sql)
+            throws SQLException {
+        try {
+            statement.execute(sql);
+            StateLogger.logGlobalExecutionEvent(getThreadId(), databaseName, sql, true, null);
+        } catch (SQLException e) {
+            StateLogger.logGlobalExecutionEvent(getThreadId(), databaseName, sql, false, e.getMessage());
+            throw e;
+        }
     }
 
 }

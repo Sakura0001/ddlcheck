@@ -16,6 +16,7 @@ public class DBMSExecutor {
     private final Randomly r;
     private final boolean createDatabaseOnRun;
     private final String generatedObjectNamePrefix;
+    private int threadId = -1;
 
     private List<Map<Integer, Map<Integer, Integer>>> seqCounterList = null;
 
@@ -66,6 +67,7 @@ public class DBMSExecutor {
         logger = new StateLogger(logName, provider, options);
         state.setRandomly(r);
         state.setDatabaseName(databaseName);
+        state.setThreadId(threadId);
         state.setGeneratedObjectNamePrefix(generatedObjectNamePrefix);
         state.setMainOptions(options);
         state.setDbmsSpecificOptions(command);
@@ -108,6 +110,7 @@ public class DBMSExecutor {
         Randomly r = new Randomly(seed);
         state.setRandomly(r);
         state.setDatabaseName(databaseName);
+        state.setThreadId(threadId);
         state.setGeneratedObjectNamePrefix(generatedObjectNamePrefix);
         state.setMainOptions(options);
         state.setDbmsSpecificOptions(command);
@@ -124,5 +127,9 @@ public class DBMSExecutor {
 
     public void setSeqCounterList(List<Map<Integer, Map<Integer, Integer>>> seqCounterList) {
         this.seqCounterList = seqCounterList;
+    }
+
+    public void setThreadId(int threadId) {
+        this.threadId = threadId;
     }
 }

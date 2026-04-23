@@ -54,6 +54,9 @@ public class MainOptions {
     @Parameter(names = "--log-execution-time", description = "Logs the execution time of each statement (requires --log-each-select to be enabled)", arity = 1)
     private boolean logExecutionTime = true; // NOPMD
 
+    @Parameter(names = "--log-global-execution", description = "Logs every executed SQL statement for the current run into one global file", arity = 1)
+    private boolean logGlobalExecution = false; // NOPMD
+
     @Parameter(names = "--print-failed", description = "Logs failed insert, create and other statements without results", arity = 1)
     private boolean loggerPrintFailed = false; // NOPMD
 
@@ -202,6 +205,10 @@ public class MainOptions {
             throw new AssertionError();
         }
         return logExecutionTime;
+    }
+
+    public boolean logGlobalExecution() {
+        return logGlobalExecution;
     }
 
     public boolean loggerPrintFailed() {
