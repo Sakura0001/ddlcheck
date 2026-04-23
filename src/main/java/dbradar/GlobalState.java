@@ -1,8 +1,5 @@
 package dbradar;
 
-import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -158,12 +155,7 @@ public abstract class GlobalState {
 
     public Grammar loadGrammar(String grammarPath) {
         try {
-            URL fileURL = GlobalState.class.getClassLoader().getResource(grammarPath);
-            if (fileURL == null) {
-                throw new RuntimeException(
-                        String.format("GlobalState: grammar file %s does not exist", grammarPath));
-            }
-            String grammarStr = Files.readString(Paths.get(fileURL.toURI()));
+            String grammarStr = ResourceUtils.readText(grammarPath);
             GrammarParser grammarParser = new GrammarParser(grammarStr);
             Grammar grammar = grammarParser.parse();
             if (grammar == null) {

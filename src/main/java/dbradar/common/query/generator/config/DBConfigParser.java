@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import dbradar.ResourceUtils;
 import org.luaj.vm2.Globals;
 import org.luaj.vm2.LuaValue;
 import org.luaj.vm2.Varargs;
@@ -16,7 +17,7 @@ public class DBConfigParser {
 
     public DBConfigParser(String configPath) {
         luaGlobals = JsePlatform.standardGlobals();
-        luaGlobals.loadfile(configPath).call();
+        luaGlobals.load(ResourceUtils.readText(configPath), configPath).call();
     }
 
     /**
