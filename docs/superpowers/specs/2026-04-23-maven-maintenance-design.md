@@ -23,7 +23,7 @@ Bring the project under Maven-based maintenance without removing the existing `l
 - Keep `libs/` in the repository and reference the required jars from `pom.xml`.
 - Configure Maven for:
   - Java 17 compilation
-  - annotation processing for AutoService
+  - compilation behavior aligned with the current `javac -proc:none` flow
   - unit/integration test compilation under `src/test/java`
   - JUnit 5 test execution
 - Remove local generated `.class` files and generated build directories from the working tree.
@@ -45,15 +45,17 @@ The `pom.xml` will use `system`-scoped dependencies with `${project.basedir}/lib
 - `jcommander`
 - `grammar-core`
 - `luaj-jse`
-- `auto-service`
 - `auto-service-annotations`
 - `slf4j-simple`
 - `postgresql`
 - `junit-jupiter-api`
 - `junit-jupiter-engine`
 - `junit-jupiter-params`
+- supporting JUnit platform jars that are already present in `libs/`
 
 This is not the most portable Maven pattern, but it matches the user requirement to keep `libs/` and let the project be maintained through Maven with minimal behavioral change.
+
+The project no longer relies on generated `ServiceLoader` metadata at runtime because `Main.getDBMSProviders()` manually constructs the PostgreSQL provider. Maven compilation will therefore mirror the current `javac -proc:none` behavior instead of introducing new annotation-processing requirements.
 
 ## Cleanup strategy
 

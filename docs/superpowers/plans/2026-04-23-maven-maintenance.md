@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the current source layout and runtime behavior intact. Introduce a root `pom.xml` that mirrors the existing manual classpath, then remove generated artifacts and IDE metadata so the repository is readable and Maven-aware without a broad refactor.
 
-**Tech Stack:** Java 17, Maven POM metadata, local jar dependencies from `libs/`, JUnit 5, PostgreSQL JDBC, AutoService.
+**Tech Stack:** Java 17, Maven POM metadata, local jar dependencies from `libs/`, JUnit 5, PostgreSQL JDBC.
 
 ---
 
@@ -78,7 +78,7 @@ Extend `pom.xml` with `system`-scoped dependencies whose `systemPath` points int
 </dependency>
 ```
 
-Repeat the same pattern for `grammar-core`, `luaj-jse`, `auto-service`, `auto-service-annotations`, `slf4j-simple`, `postgresql`, and the JUnit jars.
+Repeat the same pattern for the remaining jars in `libs/` so the Maven classpath mirrors the current manual `libs/*` classpath rather than trying to infer a minimal subset.
 
 - [ ] **Step 3: Add build plugins**
 
@@ -104,7 +104,7 @@ Configure:
 </build>
 ```
 
-Also add `annotationProcessorPaths` so AutoService processing uses the jars from `libs/`.
+Also configure the compiler plugin to mirror the existing manual build with `-proc:none`.
 
 - [ ] **Step 4: Document the Maven commands**
 

@@ -3,3 +3,5 @@ report/
 *.class
 build/
 logs/
+.idea/
+*.iml
