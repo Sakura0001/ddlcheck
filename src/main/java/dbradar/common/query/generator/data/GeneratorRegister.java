@@ -69,6 +69,30 @@ public class GeneratorRegister {
 
     private Generator getPostgreSQLSpecificGenerator(PostgreSQLSchema.PostgreSQLColumn column) {
         switch (column.getType()) {
+            case INT:
+                return new LambdaGenerator(state -> Integer.toString(Randomly.getNotCachedInteger(-100000, 100001)));
+            case BOOLEAN:
+                return new LambdaGenerator(state -> Randomly.getBoolean() ? "TRUE" : "FALSE");
+            case TEXT:
+                return new LambdaGenerator(state -> new TextGenerator(Randomly.getNotCachedInteger(1, 33)).generate(state));
+            case DECIMAL:
+                return new LambdaGenerator(state -> String.format("%d.%04d",
+                        Randomly.getNotCachedInteger(-100000, 100001),
+                        Randomly.getNotCachedInteger(0, 10000)));
+            case FLOAT:
+            case REAL:
+                return new LambdaGenerator(state -> Double.toString(Randomly.getNonCachedDouble(-100000.0, 100000.0)));
+            case RANGE:
+                return new LambdaGenerator(state -> {
+                    int lower = Randomly.getNotCachedInteger(-1000, 1000);
+                    int upper = lower + Randomly.getNotCachedInteger(1, 1000);
+                    return String.format("'[%d,%d)'::%s", lower, upper, column.getDataType());
+                });
+            case INET:
+                return new LambdaGenerator(state -> String.format("'10.%d.%d.%d'::inet",
+                        Randomly.getNotCachedInteger(0, 256),
+                        Randomly.getNotCachedInteger(0, 256),
+                        Randomly.getNotCachedInteger(1, 255)));
             case UUID:
                 return new LambdaGenerator(state -> "'" + java.util.UUID.randomUUID() + "'::uuid");
             case JSON:

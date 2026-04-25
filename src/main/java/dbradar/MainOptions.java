@@ -31,10 +31,10 @@ public class MainOptions {
     private int maxNumberInserts = 30; // NOPMD
 
     @Parameter(names = {"--ddl-count"}, description = "Specifies how many successful DDL statements should be executed during each database bootstrap round")
-    private int ddlCount = 10; // NOPMD
+    private int ddlCount = 100; // NOPMD
 
     @Parameter(names = {"--dml-count"}, description = "Specifies how many successful DML statements should be executed during each database bootstrap round")
-    private int dmlCount = 10; // NOPMD
+    private int dmlCount = 100; // NOPMD
 
     @Parameter(names = {
             "--max-expression-depth"}, description = "Specifies the maximum depth of randomly-generated expressions")

@@ -5,9 +5,10 @@ create_table:
     @disable-oracle write_guard, transaction_verifier
     | CREATE UNLOGGED? TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
 
-create_partitioned_table:
-    CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY RANGE (partition_key1)
+create_ppp:
+    | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY RANGE (partition_key1)
     | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_key2_column partition_payload_column*) PARTITION BY RANGE (partition_key1, partition_key2)
+    | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_key2_column partition_payload_column*) PARTITION BY RANGE ((partition_key1 + partition_key2))
     | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY LIST (partition_key1)
     | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY HASH (partition_key1)
     | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_key2_column partition_payload_column*) PARTITION BY HASH (partition_key1, partition_key2)
@@ -62,15 +63,37 @@ more_new_column:
 
 type_name:
     INT
+    | INTEGER
+    | SMALLINT
+    | BIGINT
     | BOOLEAN
     | TEXT
+    | _varchar_type
+    | _char_type
     | DECIMAL
+    | _decimal_type
+    | NUMERIC
+    | _numeric_type
     | FLOAT
     | REAL
     | int4range
     | MONEY
     | BIT
+    | _bit_type
+    | _varbit_type
     | INET
+    | CIDR
+    | MACADDR
+    | MACADDR8
+    | BYTEA
+    | DATE
+    | TIME
+    | TIMESTAMP
+    | INTERVAL
+    | UUID
+    | JSON
+    | JSONB
+    | XML
 
 column_constraint:
     PRIMARY KEY
@@ -85,7 +108,7 @@ column_constraint:
     | generated_constraint          @disable-query{c\d+\s}
 
 check_expr:
-    CHECK(bool_expr)
+    CHECK(TRUE)
 
 default_expr:
     DEFAULT (numerical_expr)
@@ -509,6 +532,9 @@ alter_table:
 alter_table_attach_partition:
     ALTER TABLE _partitioned_table_without_default ATTACH PARTITION _detached_partition_candidate DEFAULT
 
+alter_table_attach_partition_for_values:
+    ALTER TABLE _partitioned_table_for_new_partition ATTACH PARTITION _detached_partition_candidate _new_partition_bound
+
 alter_table_detach_partition:
     ALTER TABLE _partitioned_table_with_partitions DETACH PARTITION _partition_of_selected_table
 
@@ -619,8 +645,8 @@ action_more:
 
 # INSERT
 insert:
-    INSERT INTO _insert_target_table (_insert_columns) overriding_value? VALUES (_insert_values)
-    | INSERT INTO _insert_target_table (_insert_columns) VALUES (_insert_values)
+    INSERT INTO _insert_target_table (_insert_columns) overriding_value? VALUES _insert_rows
+    | INSERT INTO _insert_target_table (_insert_columns) VALUES _insert_rows
 
 overriding_value:
     OVERRIDING SYSTEM VALUE
@@ -629,6 +655,9 @@ overriding_value:
 # UPDATE
 update:
     UPDATE ONLY? _updatable_table SET assignment assignment_more* where_clause?
+
+update_multi_row:
+    UPDATE ONLY? _updatable_table SET assignment assignment_more* WHERE TRUE
 
 assignment:
     _distinct_column = _value
@@ -639,6 +668,9 @@ assignment_more:
 # DELETE
 delete:
     DELETE FROM ONLY? _table where_clause?
+
+delete_multi_row:
+    DELETE FROM ONLY? _table WHERE TRUE
 
 # ANALYZE
 analyze_table:

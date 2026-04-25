@@ -35,8 +35,8 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
     public PostgreSQLEDCOracle(PostgreSQLGlobalState state) {
         super(state);
         synState = new PostgreSQLGlobalState();
-        PostgresCommon.addCommonExpressionErrors(EXPECTED_QUERY_ERRORS);
-        PostgresCommon.addCommonFetchErrors(EXPECTED_QUERY_ERRORS);
+        PostgresCommon.addCommonExpressionErrors(expectedQueryErrors);
+        PostgresCommon.addCommonFetchErrors(expectedQueryErrors);
     }
 
     @Override
@@ -272,6 +272,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
     @Override
     public List<SQLQueryAdapter> fetchCreateStmts(PostgreSQLGlobalState state) throws SQLException {
         List<SQLQueryAdapter> createStmts = new ArrayList<>();
+        List<SQLQueryAdapter> postCreateStmts = new ArrayList<>();
 
         Statement statement = state.getConnection().createStatement();
         createStmts.addAll(fetchCustomTypeCreateStmts(statement));
@@ -362,26 +363,8 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                     }
                     columnRes.close();
 
-                    List<String> constraints = new ArrayList<>();
-                    List<String> constraintNames = new ArrayList<>();
-                    String fetchConstraintName = String.format(
-                            "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_NAME = '%s' AND table_schema %s",
-                            tableName, schemaMatcher);
-                    ResultSet constraintNameRes = statement.executeQuery(fetchConstraintName);
-                    while (constraintNameRes.next()) {
-                        String constraintName = constraintNameRes.getString("CONSTRAINT_NAME");
-                        constraintNames.add(constraintName);
-                    }
-                    constraintNameRes.close();
-                    for (String constraintName : constraintNames) {
-                        String fetchConstraint = String.format("SELECT pg_get_constraintdef(oid) as constraint FROM pg_constraint WHERE conname='%s';", constraintName);
-                        ResultSet constraintRes = statement.executeQuery(fetchConstraint);
-                        if (constraintRes.next()) {
-                            String constraint = constraintRes.getString("constraint");
-                            constraints.add(constraint);
-                        }
-                        constraintRes.close();
-                    }
+                    List<String> constraints = fetchTableConstraintDefs(statement, tableName, schemaMatcher);
+                    List<String> foreignKeys = fetchForeignKeyConstraintDefs(statement, tableName, schemaMatcher);
 
                     // obtain the parent of the table specified by inherits
                     List<String> parents = new ArrayList<>();
@@ -471,19 +454,20 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                     }
 
                     createStmts.add(new SQLQueryAdapter(createTable.toString()));
-
-                    // obtain create index on table
-                    if (!table.isTemporary()) {
-                        String fetchIndexInfo = String.format(
-                                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename='%s'",
-                                tableName);
-                        ResultSet indexRes = statement.executeQuery(fetchIndexInfo);
-                        while (indexRes.next()) {
-                            String indexInfo = indexRes.getString("indexdef");
-                            createStmts.add(new SQLQueryAdapter(indexInfo));
-                        }
-                        indexRes.close();
+                    for (String foreignKey : foreignKeys) {
+                        postCreateStmts.add(new SQLQueryAdapter("ALTER TABLE " + tableName + " ADD " + foreignKey));
                     }
+
+                    // Rebuild standalone indexes for both public and temp tables.
+                    String fetchIndexInfo = String.format(
+                            "SELECT indexdef FROM pg_indexes WHERE schemaname %s AND tablename='%s'",
+                            schemaMatcher, tableName);
+                    ResultSet indexRes = statement.executeQuery(fetchIndexInfo);
+                    while (indexRes.next()) {
+                        String indexInfo = indexRes.getString("indexdef");
+                        createStmts.add(new SQLQueryAdapter(indexInfo));
+                    }
+                    indexRes.close();
                 }
             } catch (SQLException ignored) {
             }
@@ -506,9 +490,50 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
             createStmts.add(new SQLQueryAdapter(createMatView));
         }
         matViewRes.close();
+        createStmts.addAll(postCreateStmts);
         statement.close();
 
         return createStmts;
+    }
+
+    private List<String> fetchTableConstraintDefs(Statement statement, String tableName, String schemaMatcher)
+            throws SQLException {
+        List<String> constraints = new ArrayList<>();
+        String fetchConstraints = String.format(
+                "SELECT pg_get_constraintdef(c.oid, true) AS constraint_def "
+                        + "FROM pg_constraint c "
+                        + "JOIN pg_class r ON r.oid = c.conrelid "
+                        + "JOIN pg_namespace n ON n.oid = r.relnamespace "
+                        + "WHERE r.relname = %s AND n.nspname %s "
+                        + "AND c.contype <> 'f' "
+                        + "ORDER BY c.conname",
+                quoteLiteral(tableName), schemaMatcher);
+        try (ResultSet constraintRes = statement.executeQuery(fetchConstraints)) {
+            while (constraintRes.next()) {
+                constraints.add(constraintRes.getString("constraint_def"));
+            }
+        }
+        return constraints;
+    }
+
+    private List<String> fetchForeignKeyConstraintDefs(Statement statement, String tableName, String schemaMatcher)
+            throws SQLException {
+        List<String> foreignKeys = new ArrayList<>();
+        String fetchForeignKeys = String.format(
+                "SELECT pg_get_constraintdef(c.oid, true) AS constraint_def "
+                        + "FROM pg_constraint c "
+                        + "JOIN pg_class r ON r.oid = c.conrelid "
+                        + "JOIN pg_namespace n ON n.oid = r.relnamespace "
+                        + "WHERE r.relname = %s AND n.nspname %s "
+                        + "AND c.contype = 'f' AND c.conislocal "
+                        + "ORDER BY c.conname",
+                quoteLiteral(tableName), schemaMatcher);
+        try (ResultSet foreignKeyRes = statement.executeQuery(fetchForeignKeys)) {
+            while (foreignKeyRes.next()) {
+                foreignKeys.add(foreignKeyRes.getString("constraint_def"));
+            }
+        }
+        return foreignKeys;
     }
 
     private List<SQLQueryAdapter> fetchCustomTypeCreateStmts(Statement statement) throws SQLException {

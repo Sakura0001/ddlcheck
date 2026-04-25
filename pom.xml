@@ -251,7 +251,7 @@
                         <configuration>
                             <includeScope>system</includeScope>
                             <outputDirectory>${project.build.outputDirectory}</outputDirectory>
-                            <excludes>META-INF/*.SF,META-INF/*.DSA,META-INF/*.RSA,META-INF/MANIFEST.MF</excludes>
+                            <excludes>META-INF/*.SF,META-INF/*.DSA,META-INF/*.RSA,META-INF/MANIFEST.MF,module-info.class,META-INF/versions/**/module-info.class</excludes>
                         </configuration>
                     </execution>
                 </executions>
@@ -286,6 +286,8 @@
                                         <exclude>META-INF/*.SF</exclude>
                                         <exclude>META-INF/*.DSA</exclude>
                                         <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>module-info.class</exclude>
+                                        <exclude>META-INF/versions/**/module-info.class</exclude>
                                     </excludes>
                                 </filter>
                             </filters>

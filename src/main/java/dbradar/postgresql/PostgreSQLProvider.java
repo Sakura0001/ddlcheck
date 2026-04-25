@@ -39,7 +39,6 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
 
     public enum PostgreSQLQueryProvider implements QueryProvider {
         CREATE_TABLE("create_table", true),
-        CREATE_PARTITIONED_TABLE("create_partitioned_table", true),
         CREATE_TABLE_PARTITION("create_table_partition", true),
         CREATE_INDEX("create_index", true),
         CREATE_VIEW("create_view", true),
@@ -47,6 +46,7 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
         TRUNCATE_TABLE("truncate", true),
         ALTER_TABLE("alter_table", true),
         ALTER_TABLE_ATTACH_PARTITION("alter_table_attach_partition", true),
+        ALTER_TABLE_ATTACH_PARTITION_FOR_VALUES("alter_table_attach_partition_for_values", true),
         ALTER_TABLE_DETACH_PARTITION("alter_table_detach_partition", true),
         ALTER_TABLE_ADD_COLUMN("alter_table_add_column", true),
         ALTER_TABLE_DROP_COLUMN("alter_table_drop_column", true),
@@ -69,7 +69,9 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
         DROP_VIEW("drop_view", true),
         INSERT("insert", false),
         UPDATE("update", false),
+        UPDATE_MULTI_ROW("update_multi_row", false),
         DELETE("delete", false),
+        DELETE_MULTI_ROW("delete_multi_row", false),
         SET_VARIABLE("set_variable", false),
         ANALYZE_TABLE("analyze_table", false),
         RESET("reset", false),
@@ -108,10 +110,8 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
 
     private static Map<QueryProvider, Integer> buildQueryWeights(GlobalState state) {
         PostgreSQLGlobalState globalState = (PostgreSQLGlobalState) state;
-
         Map<QueryProvider, Integer> queryWeights = new HashMap<>();
         queryWeights.put(PostgreSQLQueryProvider.CREATE_TABLE, 0);
-        queryWeights.put(PostgreSQLQueryProvider.CREATE_PARTITIONED_TABLE, 2);
         queryWeights.put(PostgreSQLQueryProvider.CREATE_TABLE_PARTITION, 2);
         queryWeights.put(PostgreSQLQueryProvider.CREATE_INDEX, 5);
         queryWeights.put(PostgreSQLQueryProvider.CREATE_VIEW, 5);
@@ -119,13 +119,16 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
         queryWeights.put(PostgreSQLQueryProvider.TRUNCATE_TABLE, 2);
         queryWeights.put(PostgreSQLQueryProvider.ALTER_TABLE, 5);
         queryWeights.put(PostgreSQLQueryProvider.ALTER_TABLE_ATTACH_PARTITION, 1);
+        queryWeights.put(PostgreSQLQueryProvider.ALTER_TABLE_ATTACH_PARTITION_FOR_VALUES, 1);
         queryWeights.put(PostgreSQLQueryProvider.ALTER_TABLE_DETACH_PARTITION, 1);
         queryWeights.put(PostgreSQLQueryProvider.REINDEX, 5);
         queryWeights.put(PostgreSQLQueryProvider.DROP_INDEX, 5);
         queryWeights.put(PostgreSQLQueryProvider.DROP_VIEW, 5);
         queryWeights.put(PostgreSQLQueryProvider.INSERT, globalState.getOptions().getMaxNumberInserts());
         queryWeights.put(PostgreSQLQueryProvider.UPDATE, 20);
+        queryWeights.put(PostgreSQLQueryProvider.UPDATE_MULTI_ROW, 5);
         queryWeights.put(PostgreSQLQueryProvider.DELETE, 5);
+        queryWeights.put(PostgreSQLQueryProvider.DELETE_MULTI_ROW, 2);
         queryWeights.put(PostgreSQLQueryProvider.SET_VARIABLE, 5);
         queryWeights.put(PostgreSQLQueryProvider.ANALYZE_TABLE, 1);
         queryWeights.put(PostgreSQLQueryProvider.RESET, 1);
@@ -139,11 +142,11 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
 
     public enum PostgreSQLDDLStmt {
         CREATE_TABLE(PostgreSQLQueryProvider.CREATE_TABLE),
-        CREATE_PARTITIONED_TABLE(PostgreSQLQueryProvider.CREATE_PARTITIONED_TABLE),
         CREATE_TABLE_PARTITION(PostgreSQLQueryProvider.CREATE_TABLE_PARTITION),
         CREATE_INDEX(PostgreSQLQueryProvider.CREATE_INDEX),
         CREATE_VIEW(PostgreSQLQueryProvider.CREATE_VIEW),
         ALTER_TABLE_ATTACH_PARTITION(PostgreSQLQueryProvider.ALTER_TABLE_ATTACH_PARTITION),
+        ALTER_TABLE_ATTACH_PARTITION_FOR_VALUES(PostgreSQLQueryProvider.ALTER_TABLE_ATTACH_PARTITION_FOR_VALUES),
         ALTER_TABLE_DETACH_PARTITION(PostgreSQLQueryProvider.ALTER_TABLE_DETACH_PARTITION),
         ALTER_TABLE_ADD_COLUMN(PostgreSQLQueryProvider.ALTER_TABLE_ADD_COLUMN),
         ALTER_TABLE_DROP_COLUMN(PostgreSQLQueryProvider.ALTER_TABLE_DROP_COLUMN),
@@ -185,7 +188,9 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
     public enum PostgreSQLDMLStmt {
         INSERT(PostgreSQLQueryProvider.INSERT, 10),
         UPDATE(PostgreSQLQueryProvider.UPDATE, 10),
-        DELETE(PostgreSQLQueryProvider.DELETE, 1);
+        UPDATE_MULTI_ROW(PostgreSQLQueryProvider.UPDATE_MULTI_ROW, 3),
+        DELETE(PostgreSQLQueryProvider.DELETE, 1),
+        DELETE_MULTI_ROW(PostgreSQLQueryProvider.DELETE_MULTI_ROW, 1);
 
         private final PostgreSQLQueryProvider queryProvider;
         private final int weight;

@@ -1,5 +1,6 @@
 package dbradar.ddlCheck;
 
+import dbradar.IgnoreMeException;
 import dbradar.MainOptions;
 import dbradar.Randomly;
 import dbradar.common.query.SQLQueryAdapter;
@@ -7,6 +8,7 @@ import dbradar.common.query.generator.QueryGenerator;
 import dbradar.postgresql.PostgreSQLGlobalState;
 import dbradar.postgresql.PostgreSQLKeyFunctionManager;
 import dbradar.postgresql.PostgreSQLOptions;
+import dbradar.postgresql.PostgreSQLSchema;
 import dbradar.postgresql.oracle.PostgreSQLEDCOracle;
 
 import java.sql.ResultSet;
@@ -29,6 +31,10 @@ public final class PostgreSQLPartitionRegressionTest {
         verifyListPartitionedTablesReplayIntoSemiState();
         verifyHashPartitionedTablesReplayIntoSemiState();
         verifyMultiColumnRangeReplayIntoSemiState();
+        verifyExpressionPartitionedTablesReplayIntoSemiState();
+        verifyMixedModulusHashPartitionRouting();
+        verifyTemporaryTableIndexesReplayIntoSemiState();
+        verifyPartitionLocalForeignKeysReplayIntoSemiState();
         verifyPartitionGrammarRootsGenerateExecutableStatements();
     }
 
@@ -151,6 +157,118 @@ public final class PostgreSQLPartitionRegressionTest {
         }
     }
 
+    private static void verifyExpressionPartitionedTablesReplayIntoSemiState() throws Exception {
+        PostgreSQLGlobalState state = createState("partition_expr_range_state");
+        PostgreSQLGlobalState semiState = createState("partition_expr_range_state_semi");
+        try {
+            execute(state, "CREATE TABLE expr_sales (partition_key1 INT NOT NULL, partition_key2 INT NOT NULL, payload TEXT) PARTITION BY RANGE ((partition_key1 + partition_key2))");
+            execute(state, "CREATE TABLE expr_sales_low PARTITION OF expr_sales FOR VALUES FROM (0) TO (100)");
+            execute(state, "CREATE TABLE expr_sales_default PARTITION OF expr_sales DEFAULT");
+            state.updateSchema();
+
+            PostgreSQLEDCOracle oracle = new PostgreSQLEDCOracle(state);
+            List<SQLQueryAdapter> fetchedStatements = oracle.fetchCreateStmts(state);
+            List<String> fetchedSql = fetchedStatements.stream().map(SQLQueryAdapter::getQueryString).toList();
+            requireContains(fetchedSql, "PARTITION BY RANGE");
+            requireContains(fetchedSql, "partition_key1 + partition_key2");
+            requireContains(fetchedSql, "FOR VALUES FROM (0) TO (100)");
+
+            List<String> replayedSql = oracle.replayCreateStmts(semiState, new ArrayList<>(fetchedStatements));
+            requireContains(replayedSql, "partition_key1 + partition_key2");
+
+            execute(state, "INSERT INTO expr_sales (partition_key1, partition_key2, payload) VALUES (10, 20, 'inside'), (100, 50, 'default')");
+            execute(semiState, "INSERT INTO expr_sales (partition_key1, partition_key2, payload) VALUES (10, 20, 'inside'), (100, 50, 'default')");
+
+            requireSingleValue(state, "SELECT count(*) FROM expr_sales_low", 1);
+            requireSingleValue(state, "SELECT count(*) FROM expr_sales_default", 1);
+            requireSingleValue(semiState, "SELECT count(*) FROM expr_sales_low", 1);
+            requireSingleValue(semiState, "SELECT count(*) FROM expr_sales_default", 1);
+        } finally {
+            closeQuietly(state, semiState);
+        }
+    }
+
+    private static void verifyMixedModulusHashPartitionRouting() throws Exception {
+        PostgreSQLGlobalState state = createState("partition_mixed_hash_state");
+        try {
+            execute(state, "CREATE TABLE mixed_hash_events (partition_key1 INT NOT NULL, payload TEXT) PARTITION BY HASH (partition_key1)");
+            execute(state, "CREATE TABLE mixed_hash_events_even PARTITION OF mixed_hash_events FOR VALUES WITH (MODULUS 2, REMAINDER 0)");
+            execute(state, "CREATE TABLE mixed_hash_events_one PARTITION OF mixed_hash_events FOR VALUES WITH (MODULUS 4, REMAINDER 1)");
+            execute(state, "CREATE TABLE mixed_hash_events_three PARTITION OF mixed_hash_events FOR VALUES WITH (MODULUS 4, REMAINDER 3)");
+            state.updateSchema();
+
+            PostgreSQLSchema.PostgreSQLTable parent = findTable(state, "mixed_hash_events");
+            state.getSchema().generatePartitionInsertValues(parent);
+
+            execute(state, "INSERT INTO mixed_hash_events (partition_key1, payload) VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')");
+            requireSingleValue(state, "SELECT count(*) FROM mixed_hash_events", 4);
+        } finally {
+            closeQuietly(state);
+        }
+    }
+
+    private static void verifyTemporaryTableIndexesReplayIntoSemiState() throws Exception {
+        PostgreSQLGlobalState state = createState("temp_index_replay_state");
+        PostgreSQLGlobalState semiState = createState("temp_index_replay_state_semi");
+        try {
+            execute(state, "CREATE TEMP TABLE temp_index_replay (a INT NOT NULL, b NUMERIC, c NUMERIC)");
+            execute(state, "CREATE UNIQUE INDEX temp_index_replay_i1 ON temp_index_replay (b DESC, c NULLS LAST, a NULLS LAST)");
+            state.updateSchema();
+
+            PostgreSQLEDCOracle oracle = new PostgreSQLEDCOracle(state);
+            List<SQLQueryAdapter> fetchedStatements = oracle.fetchCreateStmts(state);
+            List<String> fetchedSql = fetchedStatements.stream().map(SQLQueryAdapter::getQueryString).toList();
+            requireContains(fetchedSql, "CREATE TEMPORARY TABLE temp_index_replay");
+            requireContains(fetchedSql, "CREATE UNIQUE INDEX temp_index_replay_i1 ON pg_temp.temp_index_replay");
+
+            List<String> replayedSql = oracle.replayCreateStmts(semiState, new ArrayList<>(fetchedStatements));
+            requireContains(replayedSql, "CREATE UNIQUE INDEX temp_index_replay_i1 ON pg_temp.temp_index_replay");
+
+            requireSingleValue(state,
+                    "SELECT count(*) FROM pg_indexes WHERE tablename = 'temp_index_replay' AND indexname = 'temp_index_replay_i1'",
+                    1);
+            requireSingleValue(semiState,
+                    "SELECT count(*) FROM pg_indexes WHERE tablename = 'temp_index_replay' AND indexname = 'temp_index_replay_i1'",
+                    1);
+
+            String insertRows = "INSERT INTO temp_index_replay (a, b, c) VALUES (12, 12.991, -6), (12, 12.991, -120)";
+            execute(state, insertRows);
+            execute(semiState, insertRows);
+
+            String updateRows = "UPDATE temp_index_replay SET c = -7 WHERE TRUE";
+            requireExecutionFailure(state, updateRows, "duplicate key value violates unique constraint");
+            requireExecutionFailure(semiState, updateRows, "duplicate key value violates unique constraint");
+        } finally {
+            closeQuietly(state, semiState);
+        }
+    }
+
+    private static void verifyPartitionLocalForeignKeysReplayIntoSemiState() throws Exception {
+        PostgreSQLGlobalState state = createState("partition_child_fk_replay_state");
+        PostgreSQLGlobalState semiState = createState("partition_child_fk_replay_state_semi");
+        try {
+            execute(state, "CREATE TABLE fk_ref (id INT PRIMARY KEY)");
+            execute(state, "CREATE TABLE fk_parent (partition_key1 INT NOT NULL, payload INT) PARTITION BY RANGE (partition_key1)");
+            execute(state, "CREATE TABLE fk_child_low PARTITION OF fk_parent FOR VALUES FROM (0) TO (100)");
+            execute(state, "ALTER TABLE fk_child_low ADD FOREIGN KEY (payload) REFERENCES fk_ref(id)");
+            state.updateSchema();
+
+            PostgreSQLEDCOracle oracle = new PostgreSQLEDCOracle(state);
+            List<SQLQueryAdapter> fetchedStatements = oracle.fetchCreateStmts(state);
+            List<String> fetchedSql = fetchedStatements.stream().map(SQLQueryAdapter::getQueryString).toList();
+            requireContains(fetchedSql, "ALTER TABLE fk_child_low ADD FOREIGN KEY (payload) REFERENCES fk_ref(id)");
+
+            List<String> replayedSql = oracle.replayCreateStmts(semiState, new ArrayList<>(fetchedStatements));
+            requireContains(replayedSql, "ALTER TABLE fk_child_low ADD FOREIGN KEY (payload) REFERENCES fk_ref(id)");
+
+            String insertViolatingChildFk = "INSERT INTO fk_parent (partition_key1, payload) VALUES (50, 999)";
+            requireExecutionFailure(state, insertViolatingChildFk, "violates foreign key constraint");
+            requireExecutionFailure(semiState, insertViolatingChildFk, "violates foreign key constraint");
+        } finally {
+            closeQuietly(state, semiState);
+        }
+    }
+
     private static void verifyPartitionGrammarRootsGenerateExecutableStatements() throws Exception {
         PostgreSQLGlobalState coverageState = createState("partition_generator_state");
         PostgreSQLGlobalState mutationState = createState("partition_generator_mutation_state");
@@ -158,6 +276,7 @@ public final class PostgreSQLPartitionRegressionTest {
             verifyCreatePartitionedTableGrammarCoverage(coverageState);
 
             execute(mutationState, "CREATE TABLE generated_parent (partition_key1 INT NOT NULL, payload TEXT) PARTITION BY RANGE (partition_key1)");
+            execute(mutationState, "CREATE TABLE generated_parent_staging (partition_key1 INT NOT NULL, payload TEXT)");
             mutationState.updateSchema();
 
             String createPartition = generateQuery(mutationState, "create_table_partition", 29L);
@@ -179,6 +298,17 @@ public final class PostgreSQLPartitionRegressionTest {
                 throw new AssertionError("Expected attach partition statement, got: " + attachPartition);
             }
             execute(mutationState, attachPartition);
+            mutationState.updateSchema();
+
+            execute(mutationState, "CREATE TABLE generated_bound_parent (partition_key1 INT NOT NULL, payload TEXT) PARTITION BY RANGE (partition_key1)");
+            execute(mutationState, "CREATE TABLE generated_bound_parent_staging (partition_key1 INT NOT NULL, payload TEXT)");
+            mutationState.updateSchema();
+            String attachPartitionWithBound = generateQuery(mutationState, "alter_table_attach_partition_for_values", 59L);
+            if (!normalize(attachPartitionWithBound).contains("ATTACH PARTITION")
+                    || !normalize(attachPartitionWithBound).contains("FOR VALUES")) {
+                throw new AssertionError("Expected attach partition with explicit bound, got: " + attachPartitionWithBound);
+            }
+            execute(mutationState, attachPartitionWithBound);
         } finally {
             closeQuietly(coverageState, mutationState);
         }
@@ -188,9 +318,15 @@ public final class PostgreSQLPartitionRegressionTest {
         boolean sawList = false;
         boolean sawHash = false;
         boolean sawMultiColumnRange = false;
+        boolean sawExpressionRange = false;
 
         for (long seed = 1; seed <= 200; seed++) {
-            String createPartitionedTable = generateQuery(state, "create_partitioned_table", seed);
+            String createPartitionedTable;
+            try {
+                createPartitionedTable = generateQuery(state, "create_table", seed);
+            } catch (IgnoreMeException ignored) {
+                continue;
+            }
             String normalized = normalize(createPartitionedTable);
             if (normalized.contains("PARTITION BY LIST")) {
                 sawList = true;
@@ -201,19 +337,23 @@ public final class PostgreSQLPartitionRegressionTest {
             if (normalized.contains("PARTITION BY RANGE (PARTITION_KEY1, PARTITION_KEY2)")) {
                 sawMultiColumnRange = true;
             }
+            if (normalized.contains("PARTITION BY RANGE ((PARTITION_KEY1 + PARTITION_KEY2))")) {
+                sawExpressionRange = true;
+            }
 
             if ((sawList && normalized.contains("PARTITION BY LIST"))
                     || (sawHash && normalized.contains("PARTITION BY HASH"))
-                    || (sawMultiColumnRange && normalized.contains("PARTITION BY RANGE (PARTITION_KEY1, PARTITION_KEY2)"))) {
+                    || (sawMultiColumnRange && normalized.contains("PARTITION BY RANGE (PARTITION_KEY1, PARTITION_KEY2)"))
+                    || (sawExpressionRange && normalized.contains("PARTITION BY RANGE ((PARTITION_KEY1 + PARTITION_KEY2))"))) {
                 execute(state, createPartitionedTable);
                 state.updateSchema();
             }
-            if (sawList && sawHash && sawMultiColumnRange) {
+            if (sawList && sawHash && sawMultiColumnRange && sawExpressionRange) {
                 return;
             }
         }
-        throw new AssertionError(String.format("Missing partition grammar coverage: list=%s hash=%s multiRange=%s",
-                sawList, sawHash, sawMultiColumnRange));
+        throw new AssertionError(String.format("Missing partition grammar coverage: list=%s hash=%s multiRange=%s exprRange=%s",
+                sawList, sawHash, sawMultiColumnRange, sawExpressionRange));
     }
 
     private static PostgreSQLGlobalState createState(String databaseName) throws Exception {
@@ -263,6 +403,27 @@ public final class PostgreSQLPartitionRegressionTest {
             }
         }
         throw new AssertionError("Expected fragment not found: " + expectedFragment + "\nStatements:\n" + String.join("\n", statements));
+    }
+
+    private static PostgreSQLSchema.PostgreSQLTable findTable(PostgreSQLGlobalState state, String tableName) {
+        return state.getSchema().getDatabaseTablesWithoutViews().stream()
+                .filter(table -> table.getName().equals(tableName))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Expected table not found: " + tableName));
+    }
+
+    private static void requireExecutionFailure(PostgreSQLGlobalState state, String sql, String expectedMessageFragment)
+            throws Exception {
+        try (Statement statement = state.getConnection().createStatement()) {
+            statement.execute(sql);
+            throw new AssertionError("Expected statement to fail: " + sql);
+        } catch (Exception exception) {
+            String message = exception.getMessage();
+            if (message == null || !message.contains(expectedMessageFragment)) {
+                throw new AssertionError("Expected failure containing [" + expectedMessageFragment + "] for [" + sql
+                        + "] but got: " + message, exception);
+            }
+        }
     }
 
     private static String normalize(String sql) {

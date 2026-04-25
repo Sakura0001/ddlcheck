@@ -27,6 +27,9 @@ public final class PostgreSQLPartitionSupport {
     private static final Pattern HASH_BOUND_PATTERN = Pattern.compile(
             "^FOR VALUES WITH \\(modulus (\\d+), remainder (\\d+)\\)$",
             Pattern.CASE_INSENSITIVE);
+    private static final Pattern GENERATED_PARTITION_KEY_COLUMN_PATTERN = Pattern.compile("\\bpartition_key\\d+\\b",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern SIMPLE_IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
     private PostgreSQLPartitionSupport() {
     }
@@ -39,7 +42,30 @@ public final class PostgreSQLPartitionSupport {
         if (!matcher.matches()) {
             return Collections.emptyList();
         }
-        return splitAndTrim(matcher.group(2));
+        String keyDefinition = matcher.group(2);
+        if (!isSimpleColumnList(keyDefinition)) {
+            return extractGeneratedPartitionKeyColumns(keyDefinition);
+        }
+        return splitTopLevelAndTrim(keyDefinition);
+    }
+
+    public static int parsePartitionKeyArity(String partitionKeyDefinition) {
+        if (partitionKeyDefinition == null) {
+            return 0;
+        }
+        Matcher matcher = PARTITION_KEY_PATTERN.matcher(partitionKeyDefinition.trim());
+        if (!matcher.matches()) {
+            return 0;
+        }
+        return splitTopLevelAndTrim(matcher.group(2)).size();
+    }
+
+    public static boolean isExpressionPartitionKey(String partitionKeyDefinition) {
+        if (partitionKeyDefinition == null) {
+            return false;
+        }
+        Matcher matcher = PARTITION_KEY_PATTERN.matcher(partitionKeyDefinition.trim());
+        return matcher.matches() && !isSimpleColumnList(matcher.group(2));
     }
 
     public static boolean supportsDefaultPartition(PostgreSQLTable parent) {
@@ -171,7 +197,8 @@ public final class PostgreSQLPartitionSupport {
 
     private static Map<String, String> generateRangeInsertValues(PostgreSQLSchema schema, PostgreSQLTable parent) {
         List<String> keyColumns = parent.getPartitionKeyColumns();
-        if (keyColumns.isEmpty()) {
+        int keyArity = parent.getPartitionKeyArity();
+        if (keyColumns.isEmpty() || keyArity <= 0) {
             throw new IgnoreMeException("Range partitioned table does not expose partition keys.");
         }
 
@@ -184,11 +211,11 @@ public final class PostgreSQLPartitionSupport {
                     .mapToInt(bound -> bound.toValues().get(0))
                     .max()
                     .orElse(0);
-            values = repeatValue(keyColumns.size(), maxUpper + 25);
+            values = repeatValue(keyArity, maxUpper + 25);
         } else {
             RangePartitionBound bound = Randomly.fromList(explicitPartitions);
             values = new ArrayList<>();
-            for (int i = 0; i < keyColumns.size(); i++) {
+            for (int i = 0; i < keyArity; i++) {
                 int lower = bound.fromValues().get(i);
                 int upper = bound.toValues().get(i);
                 int candidate = lower + Math.max((upper - lower) / 2, 0);
@@ -197,6 +224,9 @@ public final class PostgreSQLPartitionSupport {
                 }
                 values.add(candidate);
             }
+        }
+        if (parent.isExpressionPartitionKey()) {
+            return toExpressionRangeValueMap(keyColumns, values.get(0));
         }
         return toValueMap(keyColumns, values);
     }
@@ -265,9 +295,7 @@ public final class PostgreSQLPartitionSupport {
     }
 
     private static HashCoverage getHashCoverage(PostgreSQLSchema schema, PostgreSQLTable parent) {
-        Integer modulus = null;
-        Set<Integer> remainders = new LinkedHashSet<>();
-        boolean sawPartition = false;
+        List<HashPartitionBound> bounds = new ArrayList<>();
         for (PostgreSQLTable partition : schema.getPartitions(parent)) {
             if (partition.isDefaultPartition()) {
                 continue;
@@ -276,18 +304,24 @@ public final class PostgreSQLPartitionSupport {
             if (bound == null) {
                 return null;
             }
-            sawPartition = true;
-            if (modulus == null) {
-                modulus = bound.modulus();
-            } else if (modulus != bound.modulus()) {
-                return null;
-            }
-            remainders.add(bound.remainder());
+            bounds.add(bound);
         }
-        if (!sawPartition || modulus == null) {
+        if (bounds.isEmpty()) {
             return null;
         }
-        return new HashCoverage(modulus, remainders);
+        int coverageModulus = 1;
+        for (HashPartitionBound bound : bounds) {
+            coverageModulus = lcm(coverageModulus, bound.modulus());
+        }
+        Set<Integer> remainders = new LinkedHashSet<>();
+        for (HashPartitionBound bound : bounds) {
+            for (int remainder = 0; remainder < coverageModulus; remainder++) {
+                if (remainder % bound.modulus() == bound.remainder()) {
+                    remainders.add(remainder);
+                }
+            }
+        }
+        return new HashCoverage(coverageModulus, remainders);
     }
 
     private static RangePartitionBound parseRangeBound(String partitionBound) {
@@ -355,6 +389,51 @@ public final class PostgreSQLPartitionSupport {
         return values;
     }
 
+    private static List<String> splitTopLevelAndTrim(String rawValues) {
+        if (rawValues == null || rawValues.isBlank()) {
+            return Collections.emptyList();
+        }
+        List<String> values = new ArrayList<>();
+        int start = 0;
+        int depth = 0;
+        for (int i = 0; i < rawValues.length(); i++) {
+            char ch = rawValues.charAt(i);
+            if (ch == '(') {
+                depth++;
+            } else if (ch == ')') {
+                depth = Math.max(0, depth - 1);
+            } else if (ch == ',' && depth == 0) {
+                values.add(rawValues.substring(start, i).trim());
+                start = i + 1;
+            }
+        }
+        values.add(rawValues.substring(start).trim());
+        values.removeIf(String::isEmpty);
+        return values;
+    }
+
+    private static boolean isSimpleColumnList(String keyDefinition) {
+        List<String> keys = splitTopLevelAndTrim(keyDefinition);
+        if (keys.isEmpty()) {
+            return false;
+        }
+        for (String key : keys) {
+            if (!SIMPLE_IDENTIFIER_PATTERN.matcher(key).matches()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static List<String> extractGeneratedPartitionKeyColumns(String keyDefinition) {
+        Set<String> columns = new LinkedHashSet<>();
+        Matcher matcher = GENERATED_PARTITION_KEY_COLUMN_PATTERN.matcher(keyDefinition);
+        while (matcher.find()) {
+            columns.add(matcher.group().toLowerCase());
+        }
+        return new ArrayList<>(columns);
+    }
+
     private static String joinIntegers(List<Integer> values) {
         return values.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", "));
     }
@@ -373,6 +452,33 @@ public final class PostgreSQLPartitionSupport {
             valueMap.put(keyColumns.get(i), Integer.toString(values.get(i)));
         }
         return valueMap;
+    }
+
+    private static Map<String, String> toExpressionRangeValueMap(List<String> keyColumns, int targetValue) {
+        if (!keyColumns.contains("partition_key1") || !keyColumns.contains("partition_key2")) {
+            throw new IgnoreMeException("Unsupported generated expression partition key.");
+        }
+        int left = Math.floorDiv(targetValue, 2);
+        int right = targetValue - left;
+        Map<String, String> valueMap = new HashMap<>();
+        valueMap.put("partition_key1", Integer.toString(left));
+        valueMap.put("partition_key2", Integer.toString(right));
+        return valueMap;
+    }
+
+    private static int lcm(int left, int right) {
+        return left / gcd(left, right) * right;
+    }
+
+    private static int gcd(int left, int right) {
+        int a = Math.abs(left);
+        int b = Math.abs(right);
+        while (b != 0) {
+            int tmp = a % b;
+            a = b;
+            b = tmp;
+        }
+        return a == 0 ? 1 : a;
     }
 
     private record RangePartitionBound(List<Integer> fromValues, List<Integer> toValues) {

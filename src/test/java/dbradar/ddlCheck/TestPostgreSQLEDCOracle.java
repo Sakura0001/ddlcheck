@@ -21,9 +21,9 @@ public class TestPostgreSQLEDCOracle extends TestEDCOracleBase<PostgreSQLGlobalS
 
     @Test
     public void testPostgreSQLEquationOracle() {
-        assertEquals(0, Main.executeMain("--num-threads", "10",
+        assertEquals(0, Main.executeMain("--num-threads", "40",
                 "--num-tries", "100000", "--num-queries", "5000", "--max-generated-databases", "100",
-                "--host", host, "--port", String.valueOf(port), "--username", username, "--password", password,
+                "--host", host, "--port", String.valueOf(port), "--username", username, "--password", password,"--log-global-execution","true",
                 dbName, "--oracle", "equation"));
     }
 

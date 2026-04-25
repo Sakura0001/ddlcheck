@@ -29,8 +29,8 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
     protected boolean init = true;
     protected static int maxLength = 10;
 
-    protected static final ExpectedErrors EXPECTED_QUERY_ERRORS = new ExpectedErrors();
-    protected static final ExpectedErrors UNEXPECTED_DDL_ERRORS = new ExpectedErrors();
+    protected final ExpectedErrors expectedQueryErrors = new ExpectedErrors();
+    protected final ExpectedErrors unexpectedDdlErrors = new ExpectedErrors();
 
     public EDCBase(S state) {
         this.genState = state;
@@ -75,7 +75,7 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
 
         if (queryString != null) {
             genState.getLogger().writeCurrent(queryString);
-            SQLQueryAdapter query = new SQLQueryAdapter(queryString, EXPECTED_QUERY_ERRORS);
+            SQLQueryAdapter query = new SQLQueryAdapter(queryString, expectedQueryErrors);
             try {
                 // check the correctness of DQL
                 checkDQLStmt(query);

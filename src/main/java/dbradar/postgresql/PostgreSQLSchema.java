@@ -48,6 +48,8 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         private final PartitionStrategy partitionStrategy;
         private final String partitionKeyDefinition;
         private final List<String> partitionKeyColumns;
+        private final int partitionKeyArity;
+        private final boolean expressionPartitionKey;
         private final String partitionBound;
 
         public PostgreSQLTable(String tableName, List<PostgreSQLColumn> columns, List<PostgreSQLIndex> indexes,
@@ -63,6 +65,8 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
             this.partitionParentName = partitionParentName;
             this.partitionKeyDefinition = partitionKeyDefinition;
             this.partitionKeyColumns = PostgreSQLPartitionSupport.parsePartitionKeyColumns(partitionKeyDefinition);
+            this.partitionKeyArity = PostgreSQLPartitionSupport.parsePartitionKeyArity(partitionKeyDefinition);
+            this.expressionPartitionKey = PostgreSQLPartitionSupport.isExpressionPartitionKey(partitionKeyDefinition);
             this.partitionBound = partitionBound;
             this.partitionStrategy = parsePartitionStrategy(partitionKeyDefinition);
         }
@@ -108,7 +112,11 @@ public class PostgreSQLSchema extends AbstractSchema<PostgreSQLGlobalState, Post
         }
 
         public int getPartitionKeyArity() {
-            return partitionKeyColumns.size();
+            return partitionKeyArity;
+        }
+
+        public boolean isExpressionPartitionKey() {
+            return expressionPartitionKey;
         }
 
         public String getPartitionBound() {

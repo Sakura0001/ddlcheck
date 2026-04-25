@@ -1,6 +1,7 @@
 package dbradar.postgresql;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -24,6 +25,9 @@ import dbradar.postgresql.PostgreSQLSchema.PostgreSQLTable;
 
 public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
     private static final String SELECTED_PARTITION_PARENT = "selected_partition_parent";
+    private static final int TYPE_MODIFIER_MIN = 500;
+    private static final int TYPE_MODIFIER_MAX = 1000;
+    private final Map<String, List<String>> insertValueCache = new HashMap<>();
 
     public PostgreSQLKeyFunctionManager(SQLGlobalState globalState) {
         super(globalState);
@@ -43,6 +47,13 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
         keyFuncMap.put(InsertTargetTableKeyFunc.KEY, new InsertTargetTableKeyFunc());
         keyFuncMap.put(UpdatableTableKeyFunc.KEY, new UpdatableTableKeyFunc());
         keyFuncMap.put(PartitionAwareInsertValueKeyFunc.KEY, new PartitionAwareInsertValueKeyFunc());
+        keyFuncMap.put(PartitionAwareInsertRowsKeyFunc.KEY, new PartitionAwareInsertRowsKeyFunc());
+        keyFuncMap.put(VarcharTypeKeyFunc.KEY, new VarcharTypeKeyFunc());
+        keyFuncMap.put(CharTypeKeyFunc.KEY, new CharTypeKeyFunc());
+        keyFuncMap.put(BitTypeKeyFunc.KEY, new BitTypeKeyFunc());
+        keyFuncMap.put(VarbitTypeKeyFunc.KEY, new VarbitTypeKeyFunc());
+        keyFuncMap.put(NumericTypeKeyFunc.KEY, new NumericTypeKeyFunc());
+        keyFuncMap.put(DecimalTypeKeyFunc.KEY, new DecimalTypeKeyFunc());
     }
 
 
@@ -344,6 +355,142 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
                 }
             }
         }
+    }
+
+    private class PartitionAwareInsertRowsKeyFunc implements KeyFunc {
+        public static final String KEY = "_insert_rows";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            List<AbstractTableColumn<?, ?>> columns = new ArrayList<>(currentContext.getReturnedColumns());
+            if (columns.isEmpty()) {
+                throw new QueryGenerationException("There are no insert columns for _insert_rows.");
+            }
+            int rowCount = Randomly.getNotCachedInteger(1, 5);
+            for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
+                parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, "(")));
+                Map<String, String> partitionValues = generatePartitionInsertValuesIfNeeded();
+                for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
+                    AbstractTableColumn<?, ?> column = columns.get(columnIndex);
+                    String value = partitionValues.get(column.getName());
+                    if (value == null) {
+                        value = generateColumnValue(column, rowIndex);
+                    }
+                    parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, value)));
+                    if (columnIndex != columns.size() - 1) {
+                        parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, ",")));
+                    }
+                }
+                parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, ")")));
+                if (rowIndex != rowCount - 1) {
+                    parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, ",")));
+                }
+            }
+        }
+
+        private Map<String, String> generatePartitionInsertValuesIfNeeded() {
+            PostgreSQLTable selectedTable = getSelectedTableOrNull();
+            if (selectedTable != null && selectedTable.isPartitionedTable()) {
+                try {
+                    return ((PostgreSQLSchema) globalState.getSchema()).generatePartitionInsertValues(selectedTable);
+                } catch (IgnoreMeException ignored) {
+                    throw new QueryGenerationException("Unable to generate insert values for a partitioned table.");
+                }
+            }
+            return Map.of();
+        }
+
+        private String generateColumnValue(AbstractTableColumn<?, ?> column, int rowIndex) {
+            String cacheKey = getInsertValueCacheKey(column);
+            List<String> cachedValues = insertValueCache.get(cacheKey);
+            if (rowIndex > 0 && rowIndex % 2 == 1 && cachedValues != null && !cachedValues.isEmpty()) {
+                return Randomly.fromList(cachedValues);
+            }
+
+            Generator generator = GeneratorRegister.getGenerator(column, globalState);
+            String value = generator.generate(globalState);
+            while (column.isNotNull() && value.equals("null")) {
+                value = generator.generate(globalState);
+            }
+            if (!"null".equals(value)) {
+                insertValueCache.computeIfAbsent(cacheKey, ignored -> new ArrayList<>()).add(value);
+            }
+            return value;
+        }
+
+        private String getInsertValueCacheKey(AbstractTableColumn<?, ?> column) {
+            return column.getName() + ":" + column.getType();
+        }
+    }
+
+    private class VarcharTypeKeyFunc implements KeyFunc {
+        public static final String KEY = "_varchar_type";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    "VARCHAR(" + randomUpperHalfTypeModifier() + ")")));
+        }
+    }
+
+    private class CharTypeKeyFunc implements KeyFunc {
+        public static final String KEY = "_char_type";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    "CHAR(" + randomUpperHalfTypeModifier() + ")")));
+        }
+    }
+
+    private class BitTypeKeyFunc implements KeyFunc {
+        public static final String KEY = "_bit_type";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    "BIT(" + randomUpperHalfTypeModifier() + ")")));
+        }
+    }
+
+    private class VarbitTypeKeyFunc implements KeyFunc {
+        public static final String KEY = "_varbit_type";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    "VARBIT(" + randomUpperHalfTypeModifier() + ")")));
+        }
+    }
+
+    private class NumericTypeKeyFunc implements KeyFunc {
+        public static final String KEY = "_numeric_type";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    "NUMERIC" + randomPrecisionAndScale())));
+        }
+    }
+
+    private class DecimalTypeKeyFunc implements KeyFunc {
+        public static final String KEY = "_decimal_type";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    "DECIMAL" + randomPrecisionAndScale())));
+        }
+    }
+
+    private static int randomUpperHalfTypeModifier() {
+        return Randomly.getNotCachedInteger(TYPE_MODIFIER_MIN, TYPE_MODIFIER_MAX + 1);
+    }
+
+    private static String randomPrecisionAndScale() {
+        int precision = randomUpperHalfTypeModifier();
+        int scale = Randomly.getNotCachedInteger(precision / 2, precision);
+        return String.format("(%d,%d)", precision, scale);
     }
 
     private PostgreSQLTable getSelectedPartitionedTable() {

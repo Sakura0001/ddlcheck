@@ -99,8 +99,8 @@ public final class PostgreSQLTypeCoverageSmokeTest {
                 "postgresql", "--oracle", "stress", "--stress-topology", "shared");
         require(exitCode == 0, "Expected stress type coverage run to succeed");
 
-        Path thread0Log = Path.of("logs", "postgresql", STRESS_PREFIX + "0-thread0-cur.log");
-        Path thread1Log = Path.of("logs", "postgresql", STRESS_PREFIX + "0-thread1-cur.log");
+        Path thread0Log = Path.of("logs", "postgresql", STRESS_PREFIX + "1-cur.log");
+        Path thread1Log = Path.of("logs", "postgresql", STRESS_PREFIX + "2-cur.log");
         require(Files.exists(thread0Log), "Expected shared stress log: " + thread0Log);
         require(Files.exists(thread1Log), "Expected shared stress log: " + thread1Log);
 

@@ -88,6 +88,9 @@ public final class PostgreSQLPartitionWorkload {
             exerciseListPartitionScenario(state, writer, threadId, seedBase + 100);
             exerciseHashPartitionScenario(state, writer, threadId, seedBase + 200);
             exerciseMultiColumnRangeScenario(state, writer, threadId, seedBase + 300);
+            exerciseExpressionRangeScenario(state, writer, threadId);
+            exerciseMixedModulusHashScenario(state, writer, threadId);
+            exerciseAttachPartitionForValuesScenario(state, writer, threadId);
         } finally {
             if (state.getConnection() != null) {
                 state.getConnection().close();
@@ -295,6 +298,67 @@ public final class PostgreSQLPartitionWorkload {
 
         requireSingleValue(state, String.format("SELECT count(*) FROM %s", childPartitions.get(0)), 1);
         requireSingleValue(state, String.format("SELECT count(*) FROM %s", defaultPartition), 1);
+    }
+
+    private static void exerciseExpressionRangeScenario(PostgreSQLGlobalState state, Writer writer, int threadId)
+            throws Exception {
+        writer.write(String.format("-- RANGE expression scenario thread %d%n", threadId));
+        String parent = "expr_parent_" + threadId;
+        String explicitPartition = parent + "_low";
+        String defaultPartition = parent + "_default";
+        executeSql(state, writer,
+                String.format("CREATE TABLE %s (partition_key1 INT NOT NULL, partition_key2 INT NOT NULL, payload TEXT) PARTITION BY RANGE ((partition_key1 + partition_key2))",
+                        parent));
+        executeSql(state, writer,
+                String.format("CREATE TABLE %s PARTITION OF %s FOR VALUES FROM (0) TO (100)",
+                        explicitPartition, parent));
+        executeSql(state, writer, String.format("CREATE TABLE %s PARTITION OF %s DEFAULT", defaultPartition, parent));
+        executeSql(state, writer,
+                String.format("INSERT INTO %s (partition_key1, partition_key2, payload) VALUES (10, 20, 'explicit'), (100, 50, 'default')",
+                        parent));
+
+        requireSingleValue(state, String.format("SELECT count(*) FROM %s", explicitPartition), 1);
+        requireSingleValue(state, String.format("SELECT count(*) FROM %s", defaultPartition), 1);
+    }
+
+    private static void exerciseMixedModulusHashScenario(PostgreSQLGlobalState state, Writer writer, int threadId)
+            throws Exception {
+        writer.write(String.format("-- HASH mixed-modulus scenario thread %d%n", threadId));
+        String parent = "mixed_hash_parent_" + threadId;
+        executeSql(state, writer,
+                String.format("CREATE TABLE %s (partition_key1 INT NOT NULL, payload TEXT) PARTITION BY HASH (partition_key1)",
+                        parent));
+        executeSql(state, writer,
+                String.format("CREATE TABLE %s_even PARTITION OF %s FOR VALUES WITH (MODULUS 2, REMAINDER 0)",
+                        parent, parent));
+        executeSql(state, writer,
+                String.format("CREATE TABLE %s_one PARTITION OF %s FOR VALUES WITH (MODULUS 4, REMAINDER 1)",
+                        parent, parent));
+        executeSql(state, writer,
+                String.format("CREATE TABLE %s_three PARTITION OF %s FOR VALUES WITH (MODULUS 4, REMAINDER 3)",
+                        parent, parent));
+        executeSql(state, writer,
+                String.format("INSERT INTO %s (partition_key1, payload) VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')",
+                        parent));
+
+        requireSingleValue(state, String.format("SELECT count(*) FROM %s", parent), 4);
+    }
+
+    private static void exerciseAttachPartitionForValuesScenario(PostgreSQLGlobalState state, Writer writer, int threadId)
+            throws Exception {
+        writer.write(String.format("-- ATTACH explicit-bound scenario thread %d%n", threadId));
+        String parent = "attach_bound_parent_" + threadId;
+        String staging = parent + "_staging";
+        executeSql(state, writer,
+                String.format("CREATE TABLE %s (partition_key1 INT NOT NULL, payload TEXT) PARTITION BY RANGE (partition_key1)",
+                        parent));
+        executeSql(state, writer, String.format("CREATE TABLE %s (partition_key1 INT NOT NULL, payload TEXT)", staging));
+        executeSql(state, writer,
+                String.format("ALTER TABLE %s ATTACH PARTITION %s FOR VALUES FROM (0) TO (100)", parent, staging));
+        executeSql(state, writer,
+                String.format("INSERT INTO %s (partition_key1, payload) VALUES (50, 'attached')", parent));
+
+        requireSingleValue(state, String.format("SELECT count(*) FROM %s", staging), 1);
     }
 
     private static void executeSql(PostgreSQLGlobalState state, Writer writer, String sql) throws Exception {
