@@ -13,6 +13,7 @@ import dbradar.common.query.DBRadarResultSet;
 import dbradar.common.query.QueryConfig;
 import dbradar.common.query.SQLQueryAdapter;
 import dbradar.common.query.generator.QueryGenerator;
+import dbradar.common.query.generator.QueryGenerationException;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -94,12 +95,28 @@ public class PostgreSQLProvider extends SQLProviderAdapter {
         @Override
         public SQLQueryAdapter getQuery(GlobalState globalState) {
             PostgreSQLGlobalState state = (PostgreSQLGlobalState) globalState;
+            if (this == SELECT) {
+                return getSafeSelectQuery(state);
+            }
+
             QueryGenerator queryGenerator = new QueryGenerator(state, state.getGrammar(), queryConfig.getQueryRoot(),
                     new PostgreSQLKeyFunctionManager(state));
-
             SQLQueryAdapter query = new SQLQueryAdapter(queryGenerator.getRandomQuery());
             query.setCanAffectSchema(queryConfig.canAffectSchema());
             return query;
+        }
+
+        private SQLQueryAdapter getSafeSelectQuery(PostgreSQLGlobalState state) {
+            for (int attempt = 0; attempt < 100; attempt++) {
+                try {
+                    SQLQueryAdapter query = new SQLQueryAdapter(PostgreSQLSelectQueryBuilder.generate(state));
+                    PostgreSQLSelectQueryPolicy.validateGeneratedSelect(query.getQueryString());
+                    query.setCanAffectSchema(false);
+                    return query;
+                } catch (QueryGenerationException | IgnoreMeException ignored) {
+                }
+            }
+            throw new QueryGenerationException("Unable to generate a safe SELECT query");
         }
 
         @Override

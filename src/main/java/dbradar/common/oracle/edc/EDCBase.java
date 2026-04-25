@@ -22,6 +22,9 @@ import java.util.Objects;
 public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
 
     private static final int MIN_BOOTSTRAP_ATTEMPTS = 100;
+    private static final String[] DML_TARGET_TABLE_NODE_NAMES = {
+            "_insert_target_table", "_updatable_table", "_table"
+    };
 
     protected final S genState; // generated DDL sequence
     protected S synState = null; // synthesized DDL sequence
@@ -141,9 +144,8 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
             boolean success = checkStmt(query.getQueryString(), logExecutionAttempt);
             if (success) {
                 // validate the table data
-                ASTNode table = query.getQueryAST().getChildByName("_table");
-                if (table != null) {
-                    String tableName = table.getToken().getValue();
+                String tableName = getDmlTargetTableName(query);
+                if (tableName != null) {
                     String checkTableContent = String.format("SELECT * FROM %s;", tableName);
                     checkDQLStmt(new SQLQueryAdapter(checkTableContent));
                 }
@@ -151,6 +153,24 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
             return success;
         }
         return false;
+    }
+
+    private String getDmlTargetTableName(SQLQueryAdapter query) {
+        ASTNode queryAST = query.getQueryAST();
+        if (queryAST == null) {
+            return null;
+        }
+        for (String nodeName : DML_TARGET_TABLE_NODE_NAMES) {
+            ASTNode table = queryAST.getChildByName(nodeName);
+            if (table == null) {
+                continue;
+            }
+            String tableName = table.toQueryString();
+            if (tableName != null && !tableName.isBlank()) {
+                return tableName;
+            }
+        }
+        return null;
     }
 
     protected boolean checkStmt(String stmt) {
@@ -305,7 +325,7 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
                 throw new IgnoreMeException();
             }
             Main.nrUnsuccessfulActions.addAndGet(1);
-//            throw new AssertionError(query.getQueryString(), e);
+            throw new AssertionError(query.getQueryString(), e);
         } finally {
             if (result != null && !result.isClosed()) {
                 result.close();
