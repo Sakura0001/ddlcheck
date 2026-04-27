@@ -4,6 +4,7 @@ import dbradar.IgnoreMeException;
 import dbradar.MainOptions;
 import dbradar.Randomly;
 import dbradar.common.query.SQLQueryAdapter;
+import dbradar.common.query.generator.QueryGenerationException;
 import dbradar.common.query.generator.QueryGenerator;
 import dbradar.postgresql.PostgreSQLGlobalState;
 import dbradar.postgresql.PostgreSQLKeyFunctionManager;
@@ -35,6 +36,8 @@ public final class PostgreSQLPartitionRegressionTest {
         verifyMixedModulusHashPartitionRouting();
         verifyTemporaryTableIndexesReplayIntoSemiState();
         verifyPartitionLocalForeignKeysReplayIntoSemiState();
+        verifyParentOnlyPartitionedUniqueIndexesReplayAfterPartitions();
+        verifyBootstrapDdlSequenceRecoversWhenLastTableWasDropped();
         verifyPartitionGrammarRootsGenerateExecutableStatements();
     }
 
@@ -269,6 +272,60 @@ public final class PostgreSQLPartitionRegressionTest {
         }
     }
 
+    private static void verifyParentOnlyPartitionedUniqueIndexesReplayAfterPartitions() throws Exception {
+        PostgreSQLGlobalState state = createState("partition_parent_only_index_state");
+        PostgreSQLGlobalState semiState = createState("partition_parent_only_index_state_semi");
+        try {
+            execute(state, "CREATE TABLE a_replay_parent (partition_key1 INT NOT NULL, payload INT) PARTITION BY RANGE (partition_key1)");
+            execute(state, "CREATE TABLE z_replay_child PARTITION OF a_replay_parent FOR VALUES FROM (0) TO (100)");
+            execute(state, "CREATE UNIQUE INDEX b_replay_parent_uq ON ONLY a_replay_parent (partition_key1)");
+            state.updateSchema();
+
+            PostgreSQLEDCOracle oracle = new PostgreSQLEDCOracle(state);
+            List<SQLQueryAdapter> fetchedStatements = oracle.fetchCreateStmts(state);
+            List<String> replayedSql = oracle.replayCreateStmts(semiState, new ArrayList<>(fetchedStatements));
+            requireContains(replayedSql, "CREATE UNIQUE INDEX b_replay_parent_uq ON ONLY public.a_replay_parent");
+
+            String duplicateInsert = "INSERT INTO a_replay_parent (partition_key1, payload) VALUES (50, 1), (50, 2)";
+            execute(state, duplicateInsert);
+            execute(semiState, duplicateInsert);
+            requireSingleValue(state, "SELECT count(*) FROM a_replay_parent", 2);
+            requireSingleValue(semiState, "SELECT count(*) FROM a_replay_parent", 2);
+        } finally {
+            closeQuietly(state, semiState);
+        }
+    }
+
+    private static void verifyBootstrapDdlSequenceRecoversWhenLastTableWasDropped() throws Exception {
+        PostgreSQLGlobalState state = createState("bootstrap_empty_recovery_state");
+        try {
+            List<String> ddlSeq = new ArrayList<>();
+            String createTable = "CREATE TABLE bootstrap_erased (c1 INT)";
+            String dropTable = "DROP TABLE bootstrap_erased";
+            execute(state, createTable);
+            ddlSeq.add(createTable);
+            execute(state, dropTable);
+            ddlSeq.add(dropTable);
+            state.updateSchema();
+
+            if (!state.getSchema().getDatabaseTablesWithoutViews().isEmpty()) {
+                throw new AssertionError("Expected bootstrap schema to have no base table before recovery");
+            }
+
+            PostgreSQLEDCOracle oracle = new PostgreSQLEDCOracle(state);
+            oracle.getDDLSequence(ddlSeq, ddlSeq.size());
+
+            if (state.getSchema().getDatabaseTablesWithoutViews().isEmpty()) {
+                throw new AssertionError("Expected bootstrap recovery to add a base table");
+            }
+            if (ddlSeq.size() <= 2) {
+                throw new AssertionError("Expected bootstrap recovery DDL to be appended");
+            }
+        } finally {
+            closeQuietly(state);
+        }
+    }
+
     private static void verifyPartitionGrammarRootsGenerateExecutableStatements() throws Exception {
         PostgreSQLGlobalState coverageState = createState("partition_generator_state");
         PostgreSQLGlobalState mutationState = createState("partition_generator_mutation_state");
@@ -324,7 +381,7 @@ public final class PostgreSQLPartitionRegressionTest {
             String createPartitionedTable;
             try {
                 createPartitionedTable = generateQuery(state, "create_table", seed);
-            } catch (IgnoreMeException ignored) {
+            } catch (IgnoreMeException | QueryGenerationException ignored) {
                 continue;
             }
             String normalized = normalize(createPartitionedTable);

@@ -4,9 +4,16 @@ create_table:
     | CREATE temporary? TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
     @disable-oracle write_guard, transaction_verifier
     | CREATE UNLOGGED? TABLE if_not_exist? _new_table_name (wide_new_columns table_constraint*) table_option*
+    | create_partitioned_table_variant
+    | create_table_partition_variant
+    | create_table_like_variant
+    | create_table_as_variant
 
 create_ppp:
-    | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY RANGE (partition_key1)
+    create_partitioned_table_variant
+
+create_partitioned_table_variant:
+    CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY RANGE (partition_key1)
     | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_key2_column partition_payload_column*) PARTITION BY RANGE (partition_key1, partition_key2)
     | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_key2_column partition_payload_column*) PARTITION BY RANGE ((partition_key1 + partition_key2))
     | CREATE TABLE if_not_exist? _new_table_name (partition_key1_column partition_payload_column*) PARTITION BY LIST (partition_key1)
@@ -23,7 +30,22 @@ partition_payload_column:
     , _new_column_name type_name
 
 create_table_partition:
+    create_table_partition_variant
+
+create_table_partition_variant:
     CREATE TABLE if_not_exist? _new_table_name PARTITION OF _partitioned_table_for_new_partition _new_partition_bound
+
+create_table_like:
+    create_table_like_variant
+
+create_table_like_variant:
+    CREATE TABLE if_not_exist? _new_table_name (LIKE _table INCLUDING ALL)
+
+create_table_as:
+    create_table_as_variant
+
+create_table_as_variant:
+    CREATE TABLE if_not_exist? _new_table_name AS SELECT * FROM _table LIMIT 3
 
 temporary:
     TEMP
@@ -525,9 +547,85 @@ drop_index:
 drop_view:
     DROP VIEW if_exists? _view cascade_or_restrict?
 
+# REFRESH/DROP MATERIALIZED VIEW
+refresh_materialized_view:
+    REFRESH MATERIALIZED VIEW _materialized_view
+
+drop_materialized_view:
+    DROP MATERIALIZED VIEW if_exists? _materialized_view cascade_or_restrict?
+
 # ALTER TABLE
 alter_table:
     ALTER TABLE ONLY? _table action action_more*
+
+alter_table_add_column:
+    ALTER TABLE ONLY? _table alter_table_add_column_action
+
+alter_table_drop_column:
+    ALTER TABLE ONLY? _table alter_table_drop_column_action
+
+alter_table_alter_column_type:
+    ALTER TABLE ONLY? _table alter_table_alter_column_type_action
+
+alter_table_alter_column_drop_default:
+    ALTER TABLE ONLY? _table alter_table_alter_column_drop_default_action
+
+alter_table_alter_column_set_default:
+    ALTER TABLE ONLY? _table alter_table_alter_column_set_default_action
+
+alter_table_alter_column_set_not_null:
+    ALTER TABLE ONLY? _table alter_table_alter_column_set_not_null_action
+
+alter_table_alter_column_drop_not_null:
+    ALTER TABLE ONLY? _table alter_table_alter_column_drop_not_null_action
+
+alter_table_set_column:
+    ALTER TABLE ONLY? _table alter_table_set_column_action
+
+alter_table_reset_column:
+    ALTER TABLE ONLY? _table alter_table_reset_column_action
+
+alter_table_alter_column_set_storage:
+    ALTER TABLE ONLY? _table alter_table_alter_column_set_storage_action
+
+alter_table_add_unique_key:
+    ALTER TABLE ONLY? _table alter_table_add_unique_key_action
+
+alter_table_add_primary_key:
+    ALTER TABLE ONLY? _table alter_table_add_primary_key_action
+
+alter_table_add_foreign_key:
+    ALTER TABLE ONLY? _table alter_table_add_foreign_key_action
+
+alter_table_option:
+    ALTER TABLE ONLY? _table alter_table_option_action
+
+alter_table_rename_table:
+    ALTER TABLE _table RENAME TO _new_table_name
+
+alter_table_rename_column:
+    ALTER TABLE ONLY? _table RENAME COLUMN _column TO _new_column_name
+
+alter_table_change_column:
+    ALTER TABLE ONLY? _table RENAME COLUMN _column TO _new_column_name
+
+alter_table_modify_column:
+    ALTER TABLE ONLY? _table alter_table_alter_column_type_action
+
+alter_table_add_index:
+    CREATE INDEX _new_index_name ON _table (_distinct_column)
+
+alter_table_drop_index:
+    DROP INDEX _index
+
+alter_table_rename_index:
+    ALTER INDEX _index RENAME TO _new_index_name
+
+alter_table_drop_primary_key:
+    ALTER TABLE ONLY? _table_with_primary_key DROP CONSTRAINT _selected_table_primary_key_constraint
+
+alter_table_add_check:
+    ALTER TABLE ONLY? _table ADD CHECK (TRUE)
 
 alter_table_attach_partition:
     ALTER TABLE _partitioned_table_without_default ATTACH PARTITION _detached_partition_candidate DEFAULT
@@ -539,87 +637,81 @@ alter_table_detach_partition:
     ALTER TABLE _partitioned_table_with_partitions DETACH PARTITION _partition_of_selected_table
 
 action:
-    alter_table_add_column
-    | alter_table_drop_column
-    | alter_table_alter_column_type
-    | alter_table_alter_column_drop_default
-    | alter_table_alter_column_set_default
-    | alter_table_alter_column_set_not_null
-    | alter_table_alter_column_drop_not_null
-    | alter_table_set_column
-    | alter_table_reset_column
-    | alter_table_alter_column_set_storage
-    | alter_table_add_unique_key
-    | alter_table_add_primary_key
-    | alter_table_add_foreign_key
-    | alter_table_option
-    | alter_table_rename_table
+    alter_table_add_column_action
+    | alter_table_drop_column_action
+    | alter_table_alter_column_type_action
+    | alter_table_alter_column_drop_default_action
+    | alter_table_alter_column_set_default_action
+    | alter_table_alter_column_set_not_null_action
+    | alter_table_alter_column_drop_not_null_action
+    | alter_table_set_column_action
+    | alter_table_reset_column_action
+    | alter_table_alter_column_set_storage_action
+    | alter_table_add_unique_key_action
+    | alter_table_add_primary_key_action
+    | alter_table_add_foreign_key_action
+    | alter_table_option_action
     # | VALIDATE CONSTRAINT asdf    # constraint name
 
-alter_table_add_column:
-    ADD COLUMN? if_not_exists? new_column
+alter_table_add_column_action:
+    ADD COLUMN? if_not_exists? _new_column_name INT
 
-alter_table_drop_column:
+alter_table_drop_column_action:
     DROP if_exists? _drop_column cascade_or_restrict?
 
-alter_table_alter_column_type:
-    ALTER _column set_data? TYPE type_name
+alter_table_alter_column_type_action:
+    ALTER _column set_data? TYPE TEXT USING (_column) {print("::")} TEXT
 
-alter_table_alter_column_drop_default:
+alter_table_alter_column_drop_default_action:
     ALTER _column DROP DEFAULT
 
-alter_table_alter_column_set_default:
-    ALTER _column SET DEFAULT expr
+alter_table_alter_column_set_default_action:
+    ALTER _column SET DEFAULT 0
 
-alter_table_alter_column_set_not_null:
+alter_table_alter_column_set_not_null_action:
     ALTER _column SET NOT NULL
 
-alter_table_alter_column_drop_not_null:
+alter_table_alter_column_drop_not_null_action:
     ALTER _not_pk_column DROP NOT NULL
 
-alter_table_set_column:
+alter_table_set_column_action:
     ALTER _column SET STATISTICS _int8_unsigned
     | ALTER _column SET(n_distinct_inherited = value)
     | ALTER _column SET(n_distinct = value)
     | ALTER _column SET(n_distinct_inherited = value, n_distinct = value)
 
-alter_table_reset_column:
+alter_table_reset_column_action:
     ALTER _column RESET(n_distinct_inherited)
     | ALTER _column RESET(n_distinct)
     | ALTER _column RESET(n_distinct_inherited, n_distinct)
 
-alter_table_alter_column_set_storage:
-    ALTER _column SET STORAGE storage
+alter_table_alter_column_set_storage_action:
+    ALTER _column SET STORAGE PLAIN
 
-alter_table_add_unique_key:
-    ADD CONSTRAINT _new_constraint_name UNIQUE _index
+alter_table_add_unique_key_action:
+    ADD CONSTRAINT _new_constraint_name UNIQUE USING INDEX _selected_table_unique_index
 
-alter_table_add_primary_key:
-    ADD CONSTRAINT _new_constraint_name PRIMARY KEY _index
+alter_table_add_primary_key_action:
+    ADD CONSTRAINT _new_constraint_name PRIMARY KEY USING INDEX _selected_table_unique_not_null_index
 
-alter_table_add_foreign_key:
-    ALTER TABLE _table ADD FOREIGN KEY (_column) foreign_key_clause
+alter_table_add_foreign_key_action:
+    ADD FOREIGN KEY (_column) foreign_key_clause
 
-alter_table_option:
+alter_table_option_action:
     DISABLE ROW LEVEL SECURITY
     | ENABLE ROW LEVEL SECURITY
     | FORCE ROW LEVEL SECURITY
     | NO FORCE ROW LEVEL SECURITY
-    | CLUSTER ON _index
+    | CLUSTER ON _selected_table_index
     | SET WITHOUT CLUSTER
     | SET LOGGED
     | SET UNLOGGED
     | OWNER TO CURRENT_USER
     | OWNER TO SESSION_USER
-    | RENAME TO _new_table_name
-    @disable-query {, RENAME TO}
     | REPLICA IDENTITY DEFAULT
     | REPLICA IDENTITY FULL
     | REPLICA IDENTITY NOTHING
-    | REPLICA IDENTITY USING INDEX _index
-
-alter_table_rename_table:
-    ALTER TABLE _table RENAME TO _new_table_name
+    | REPLICA IDENTITY USING INDEX _selected_table_unique_not_null_index
 
 set_data:
     SET DATA
@@ -641,12 +733,141 @@ not_valid:
 
 action_more:
     , action
-    @disable-query {RENAME TO.*,}
+
+# ALTER INDEX
+alter_index:
+    ALTER INDEX if_exists? _index alter_index_action
+
+alter_index_action:
+    RENAME TO _new_index_name
+    | SET (fillfactor = fillfactor_value)
+    | RESET (fillfactor)
+
+fillfactor_value:
+    { value = math.random(10, 100); print(value) }
+
+# ALTER VIEW
+alter_view:
+    ALTER VIEW if_exists? _view alter_view_action
+
+alter_view_action:
+    OWNER TO CURRENT_USER
+    | OWNER TO SESSION_USER
+    | RENAME TO _new_view_name
+    | SET (security_barrier = TRUE)
+    | RESET (security_barrier)
+
+# CREATE/ALTER SEQUENCE
+create_sequence:
+    CREATE SEQUENCE if_not_exists? _new_sequence_name
+
+if_not_exists:
+    IF NOT EXISTS
+
+alter_sequence:
+    ALTER SEQUENCE if_exists? _sequence alter_sequence_action
+
+alter_sequence_action:
+    RESTART WITH 1
+    | INCREMENT BY 1
+    | MINVALUE 1
+    | NO MINVALUE
+    | MAXVALUE 1000000
+    | NO MAXVALUE
+    | CACHE 1
+    | CYCLE
+    | NO CYCLE
+    | OWNED BY NONE
+
+drop_sequence:
+    DROP SEQUENCE if_exists? _sequence cascade_or_restrict?
+
+# COMMENT
+comment_on_table:
+    COMMENT ON TABLE _table IS stress_comment
+
+comment_on_column:
+    COMMENT ON COLUMN _table . _column IS stress_comment
+
+stress_comment:
+    'dbradar stress comment'
+    | NULL
+
+# GRANT/REVOKE
+grant_table:
+    GRANT SELECT, UPDATE ON TABLE? _table TO PUBLIC
+
+revoke_table:
+    REVOKE SELECT ON TABLE? _table FROM PUBLIC
+
+grant_schema:
+    GRANT USAGE, CREATE ON SCHEMA public TO PUBLIC
+
+revoke_schema:
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC
+
+grant_sequence:
+    GRANT USAGE, SELECT ON SEQUENCE _sequence TO PUBLIC
+
+revoke_sequence:
+    REVOKE SELECT ON SEQUENCE _sequence FROM PUBLIC
+
+grant_function:
+    GRANT EXECUTE ON FUNCTION _function_signature TO PUBLIC
+
+revoke_function:
+    REVOKE EXECUTE ON FUNCTION _function_signature FROM PUBLIC
+
+grant_procedure:
+    GRANT EXECUTE ON PROCEDURE _procedure_signature TO PUBLIC
+
+revoke_procedure:
+    REVOKE EXECUTE ON PROCEDURE _procedure_signature FROM PUBLIC
+
+# FUNCTION/PROCEDURE/RULE/TRIGGER
+create_function:
+    CREATE OR REPLACE FUNCTION _new_function_name ( x int ) RETURNS int LANGUAGE SQL AS 'SELECT x'
+
+alter_function:
+    CREATE OR REPLACE FUNCTION _new_function_name ( x int ) RETURNS int LANGUAGE SQL AS 'SELECT x' ; ALTER FUNCTION _selected_function_name ( int ) OWNER TO CURRENT_USER
+
+drop_function:
+    CREATE OR REPLACE FUNCTION _new_function_name ( x int ) RETURNS int LANGUAGE SQL AS 'SELECT x' ; DROP FUNCTION _selected_function_name ( int )
+
+create_procedure:
+    CREATE OR REPLACE PROCEDURE _new_procedure_name ( IN x int ) LANGUAGE plpgsql AS 'BEGIN PERFORM x; END'
+
+alter_procedure:
+    CREATE OR REPLACE PROCEDURE _new_procedure_name ( IN x int ) LANGUAGE plpgsql AS 'BEGIN PERFORM x; END' ; ALTER PROCEDURE _selected_procedure_name ( int ) OWNER TO CURRENT_USER
+
+drop_procedure:
+    CREATE OR REPLACE PROCEDURE _new_procedure_name ( IN x int ) LANGUAGE plpgsql AS 'BEGIN PERFORM x; END' ; DROP PROCEDURE _selected_procedure_name ( int )
+
+create_rule:
+    CREATE OR REPLACE RULE _new_rule_name AS ON UPDATE TO _table DO ALSO NOTHING
+
+drop_rule:
+    CREATE OR REPLACE RULE _new_rule_name AS ON UPDATE TO _table DO ALSO NOTHING ; DROP RULE _selected_rule_name ON _selected_table
+
+create_trigger:
+    CREATE OR REPLACE FUNCTION public.dbradar_trigger_func ( ) RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END' ; DROP TRIGGER IF EXISTS _new_stress_trigger_name ON _table ; CREATE TRIGGER _selected_trigger_name BEFORE INSERT OR UPDATE ON _selected_table FOR EACH ROW EXECUTE FUNCTION public.dbradar_trigger_func ( )
+
+drop_trigger:
+    CREATE OR REPLACE FUNCTION public.dbradar_trigger_func ( ) RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END' ; DROP TRIGGER IF EXISTS _new_stress_trigger_name ON _table ; CREATE TRIGGER _selected_trigger_name BEFORE INSERT ON _selected_table FOR EACH ROW EXECUTE FUNCTION public.dbradar_trigger_func ( ) ; DROP TRIGGER _selected_trigger_name ON _selected_table
 
 # INSERT
 insert:
     INSERT INTO _insert_target_table (_insert_columns) overriding_value? VALUES _insert_rows
     | INSERT INTO _insert_target_table (_insert_columns) VALUES _insert_rows
+
+insert_select:
+    INSERT INTO _insert_target_table_without_rules (_insert_columns) SELECT _insert_values ON CONFLICT DO NOTHING
+
+insert_on_conflict:
+    INSERT INTO _insert_target_table_without_rules (_insert_columns) VALUES _insert_rows ON CONFLICT DO NOTHING
+
+insert_returning:
+    INSERT INTO _insert_target_table_without_rules (_insert_columns) VALUES _insert_rows ON CONFLICT DO NOTHING RETURNING _column
 
 overriding_value:
     OVERRIDING SYSTEM VALUE
@@ -659,8 +880,20 @@ update:
 update_multi_row:
     UPDATE ONLY? _updatable_table SET assignment assignment_more* WHERE TRUE
 
+update_from:
+    UPDATE ONLY? _updatable_table SET update_non_pk_assignment FROM (SELECT 1 AS marker) AS s WHERE TRUE
+
+update_cte:
+    WITH c AS (SELECT 1 AS marker) UPDATE ONLY? _updatable_table SET update_non_pk_assignment WHERE TRUE
+
+update_returning:
+    UPDATE ONLY? _updatable_table SET update_non_pk_assignment WHERE TRUE RETURNING _column
+
 assignment:
     _distinct_column = _value
+
+update_non_pk_assignment:
+    _not_pk_column = _value
 
 assignment_more:
    , assignment
@@ -671,6 +904,32 @@ delete:
 
 delete_multi_row:
     DELETE FROM ONLY? _table WHERE TRUE
+
+delete_using:
+    DELETE FROM ONLY? _table USING (SELECT 1 AS marker) AS s WHERE FALSE
+
+delete_returning:
+    DELETE FROM ONLY? _table WHERE FALSE RETURNING _column
+
+# MERGE
+merge:
+    MERGE INTO _updatable_table_without_rules AS t USING (SELECT 1 AS marker) AS s ON TRUE WHEN MATCHED THEN DO NOTHING
+
+# Utility/session operations
+lock_table:
+    BEGIN ; LOCK TABLE _table IN SHARE ROW EXCLUSIVE MODE ; COMMIT
+
+prepare_execute:
+    DEALLOCATE ALL ; PREPARE p_dbradar ( int ) AS SELECT 1 WHERE $1 = 1 ; EXECUTE p_dbradar ( 1 ) ; DEALLOCATE p_dbradar
+
+savepoint_release:
+    BEGIN ; SAVEPOINT s_dbradar ; RELEASE SAVEPOINT s_dbradar ; COMMIT
+
+declare_fetch_close:
+    BEGIN ; DECLARE c_dbradar CURSOR FOR SELECT 1 ; FETCH 1 FROM c_dbradar ; CLOSE c_dbradar ; COMMIT
+
+copy_to_stdout:
+    COPY (SELECT 1) TO STDOUT
 
 # ANALYZE
 analyze_table:
@@ -683,6 +942,15 @@ analyze_table_op:
 table_and_columns:
        _table
        | _table (_insert_columns)
+
+# VACUUM
+vacuum:
+    VACUUM vacuum_option? _table
+
+vacuum_option:
+    ( ANALYZE )
+    | ( VERBOSE )
+    | ( ANALYZE, VERBOSE )
 
 
 # SET

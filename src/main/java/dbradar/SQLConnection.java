@@ -51,6 +51,10 @@ public class SQLConnection implements DatabaseConnection {
         return connection.isClosed();
     }
 
+    public Connection getRawConnection() {
+        return connection;
+    }
+
     private Statement wrapStatement(Statement statement) {
         return (Statement) Proxy.newProxyInstance(statement.getClass().getClassLoader(),
                 new Class[]{Statement.class}, new LoggingInvocationHandler(statement, null));

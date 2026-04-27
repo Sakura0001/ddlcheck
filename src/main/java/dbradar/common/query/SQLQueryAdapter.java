@@ -1,11 +1,16 @@
 package dbradar.common.query;
 
+import java.io.OutputStream;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.postgresql.PGConnection;
+import org.postgresql.copy.CopyManager;
 
 import dbradar.GlobalState;
 import dbradar.Main;
@@ -98,14 +103,26 @@ public class SQLQueryAdapter extends QueryAdapter {
 
     @Override
     public <G extends GlobalState> boolean execute(G globalState, String... fills) throws SQLException {
+        SQLConnection connection = (SQLConnection) globalState.getConnection();
+        if (fills.length == 0 && isCopyToStdout(query)) {
+            try {
+                executeCopyToStdout(connection);
+                Main.nrSuccessfulActions.addAndGet(1);
+                return true;
+            } catch (Exception e) {
+                Main.nrUnsuccessfulActions.addAndGet(1);
+                checkException(e, globalState);
+                return false;
+            }
+        }
         Statement s;
         if (fills.length > 0) {
-            s = ((SQLConnection) globalState.getConnection()).prepareStatement(fills[0]);
+            s = connection.prepareStatement(fills[0]);
             for (int i = 1; i < fills.length; i++) {
                 ((PreparedStatement) s).setString(i, fills[i]);
             }
         } else {
-            s = ((SQLConnection) globalState.getConnection()).createStatement();
+            s = connection.createStatement();
         }
         try {
             if (fills.length > 0) {
@@ -126,6 +143,23 @@ public class SQLQueryAdapter extends QueryAdapter {
 
     public <G extends GlobalState> boolean execute(SQLConnection connection, boolean reportException, String... fills)
             throws SQLException {
+        if (fills.length == 0 && isCopyToStdout(query)) {
+            try {
+                executeCopyToStdout(connection);
+                Main.nrSuccessfulActions.addAndGet(1);
+                return true;
+            } catch (Exception e) {
+                Main.nrUnsuccessfulActions.addAndGet(1);
+                checkException(e);
+                if (reportException) {
+                    if (e instanceof SQLException) {
+                        throw (SQLException) e;
+                    }
+                    throw new SQLException(e);
+                }
+                return false;
+            }
+        }
         Statement s;
         if (fills.length > 0) {
             s = connection.prepareStatement(fills[0]);
@@ -265,6 +299,17 @@ public class SQLQueryAdapter extends QueryAdapter {
     @Override
     public ExpectedErrors getExpectedErrors() {
         return expectedErrors;
+    }
+
+    private static boolean isCopyToStdout(String query) {
+        String normalized = query.stripLeading().toUpperCase(Locale.ROOT);
+        return normalized.startsWith("COPY ") && normalized.contains(" TO STDOUT");
+    }
+
+    private void executeCopyToStdout(SQLConnection connection) throws Exception {
+        PGConnection pgConnection = connection.getRawConnection().unwrap(PGConnection.class);
+        CopyManager copyManager = pgConnection.getCopyAPI();
+        copyManager.copyOut(query, OutputStream.nullOutputStream());
     }
 
     @Override

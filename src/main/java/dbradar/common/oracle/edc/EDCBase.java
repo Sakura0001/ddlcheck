@@ -23,7 +23,8 @@ public abstract class EDCBase<S extends SQLGlobalState> implements TestOracle {
 
     private static final int MIN_BOOTSTRAP_ATTEMPTS = 100;
     private static final String[] DML_TARGET_TABLE_NODE_NAMES = {
-            "_insert_target_table", "_updatable_table", "_table"
+            "_insert_target_table", "_insert_target_table_without_rules", "_updatable_table",
+            "_updatable_table_without_rules", "_table"
     };
 
     protected final S genState; // generated DDL sequence

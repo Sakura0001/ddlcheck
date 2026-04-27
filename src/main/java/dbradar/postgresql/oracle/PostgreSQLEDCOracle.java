@@ -84,14 +84,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
             }
 
             PostgreSQLDDLStmt ddlStmt = chooseBootstrapDdlStmt(ddlSeq.size(), targetDdlCount);
-            SQLQueryAdapter ddlQuery = null;
-            for (int j = 0; j < 100; j++) {
-                try {
-                    ddlQuery = ddlStmt.getQueryProvider().getQuery(genState);
-                    break;
-                } catch (QueryGenerationException | IgnoreMeException ignored) {
-                }
-            }
+            SQLQueryAdapter ddlQuery = generateBootstrapDdlQuery(ddlStmt);
             if (ddlQuery == null) continue;
 
             try (Statement stmt = genState.getConnection().createStatement()) {
@@ -102,9 +95,39 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
             }
         }
 
-        if (genState.getSchema().getDatabaseTablesWithoutViews().isEmpty()) {
-            throw new AssertionError("Bootstrap DDL sequence ended without a base table");
+        ensureBootstrapBaseTable(ddlSeq);
+    }
+
+    private SQLQueryAdapter generateBootstrapDdlQuery(PostgreSQLDDLStmt ddlStmt) {
+        for (int j = 0; j < 100; j++) {
+            try {
+                return ddlStmt.getQueryProvider().getQuery(genState);
+            } catch (QueryGenerationException | IgnoreMeException ignored) {
+            }
         }
+        return null;
+    }
+
+    private void ensureBootstrapBaseTable(List<String> ddlSeq) {
+        if (!genState.getSchema().getDatabaseTablesWithoutViews().isEmpty()) {
+            return;
+        }
+        for (int attempts = 0; attempts < MAX_BOOTSTRAP_GENERATION_ATTEMPTS; attempts++) {
+            SQLQueryAdapter createTable = generateBootstrapDdlQuery(PostgreSQLDDLStmt.CREATE_TABLE);
+            if (createTable == null) {
+                continue;
+            }
+            try (Statement stmt = genState.getConnection().createStatement()) {
+                stmt.execute(createTable.getQueryString());
+                genState.updateSchema();
+                ddlSeq.add(createTable.getQueryString());
+                if (!genState.getSchema().getDatabaseTablesWithoutViews().isEmpty()) {
+                    return;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        throw new AssertionError("Unable to generate a bootstrap base table");
     }
 
     private PostgreSQLDDLStmt chooseBootstrapDdlStmt(int currentSuccessfulCount, int targetDdlCount) {
@@ -255,10 +278,12 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                     statement.execute(query);
                     orderedStmts.add(query);
                     createStmts.remove(i);
+                    i--;
                 } catch (SQLException e) {
                     errorCount++;
                     if (e.getMessage().contains("already exists")) {
                         createStmts.remove(i);
+                        i--;
                     }
                     if (errorCount > 100) {
                         throw new AssertionError(e.getMessage());
@@ -272,6 +297,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
     @Override
     public List<SQLQueryAdapter> fetchCreateStmts(PostgreSQLGlobalState state) throws SQLException {
         List<SQLQueryAdapter> createStmts = new ArrayList<>();
+        List<SQLQueryAdapter> indexStmts = new ArrayList<>();
         List<SQLQueryAdapter> postCreateStmts = new ArrayList<>();
 
         Statement statement = state.getConnection().createStatement();
@@ -465,7 +491,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
                     ResultSet indexRes = statement.executeQuery(fetchIndexInfo);
                     while (indexRes.next()) {
                         String indexInfo = indexRes.getString("indexdef");
-                        createStmts.add(new SQLQueryAdapter(indexInfo));
+                        indexStmts.add(new SQLQueryAdapter(indexInfo));
                     }
                     indexRes.close();
                 }
@@ -490,6 +516,7 @@ public class PostgreSQLEDCOracle extends EDCBase<PostgreSQLGlobalState> {
             createStmts.add(new SQLQueryAdapter(createMatView));
         }
         matViewRes.close();
+        createStmts.addAll(indexStmts);
         createStmts.addAll(postCreateStmts);
         statement.close();
 

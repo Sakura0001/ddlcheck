@@ -1,9 +1,15 @@
 package dbradar.postgresql;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import dbradar.IgnoreMeException;
@@ -25,6 +31,10 @@ import dbradar.postgresql.PostgreSQLSchema.PostgreSQLTable;
 
 public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
     private static final String SELECTED_PARTITION_PARENT = "selected_partition_parent";
+    private static final String SELECTED_FUNCTION_NAME = "selected_function_name";
+    private static final String SELECTED_PROCEDURE_NAME = "selected_procedure_name";
+    private static final String SELECTED_RULE_NAME = "selected_rule_name";
+    private static final String SELECTED_TRIGGER_NAME = "selected_trigger_name";
     private static final int TYPE_MODIFIER_MIN = 500;
     private static final int TYPE_MODIFIER_MAX = 1000;
     private final Map<String, List<String>> insertValueCache = new HashMap<>();
@@ -35,8 +45,27 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
         keyFuncMap.put(DatabaseKeyFunc.KEY, new DatabaseKeyFunc());
         keyFuncMap.put(AccessMethodKeyFunc.KEY, new AccessMethodKeyFunc());
         keyFuncMap.put(DistinctTableKeyFunc.KEY, new DistinctTableKeyFunc());
+        keyFuncMap.put(TableWithPrimaryKeyKeyFunc.KEY, new TableWithPrimaryKeyKeyFunc());
         keyFuncMap.put(IndexKeyFunc.KEY, new IndexKeyFunc());
+        keyFuncMap.put(MaterializedViewKeyFunc.KEY, new MaterializedViewKeyFunc());
+        keyFuncMap.put(SelectedTableIndexKeyFunc.KEY, new SelectedTableIndexKeyFunc());
+        keyFuncMap.put(SelectedTableUniqueIndexKeyFunc.KEY, new SelectedTableUniqueIndexKeyFunc(false));
+        keyFuncMap.put(SelectedTableUniqueNotNullIndexKeyFunc.KEY, new SelectedTableUniqueNotNullIndexKeyFunc());
+        keyFuncMap.put(SelectedTablePrimaryKeyConstraintKeyFunc.KEY, new SelectedTablePrimaryKeyConstraintKeyFunc());
         keyFuncMap.put(NewConstraintNameKeyFunc.KEY, new NewConstraintNameKeyFunc());
+        keyFuncMap.put(SequenceKeyFunc.KEY, new SequenceKeyFunc());
+        keyFuncMap.put(NewSequenceNameKeyFunc.KEY, new NewSequenceNameKeyFunc());
+        keyFuncMap.put(NewFunctionNameKeyFunc.KEY, new NewFunctionNameKeyFunc());
+        keyFuncMap.put(SelectedFunctionNameKeyFunc.KEY, new SelectedFunctionNameKeyFunc());
+        keyFuncMap.put(NewProcedureNameKeyFunc.KEY, new NewProcedureNameKeyFunc());
+        keyFuncMap.put(SelectedProcedureNameKeyFunc.KEY, new SelectedProcedureNameKeyFunc());
+        keyFuncMap.put(FunctionSignatureKeyFunc.KEY, new FunctionSignatureKeyFunc());
+        keyFuncMap.put(ProcedureSignatureKeyFunc.KEY, new ProcedureSignatureKeyFunc());
+        keyFuncMap.put(NewRuleNameKeyFunc.KEY, new NewRuleNameKeyFunc());
+        keyFuncMap.put(SelectedRuleNameKeyFunc.KEY, new SelectedRuleNameKeyFunc());
+        keyFuncMap.put(NewStressTriggerNameKeyFunc.KEY, new NewStressTriggerNameKeyFunc());
+        keyFuncMap.put(SelectedTriggerNameKeyFunc.KEY, new SelectedTriggerNameKeyFunc());
+        keyFuncMap.put(SelectedTableNameKeyFunc.KEY, new SelectedTableNameKeyFunc());
         keyFuncMap.put(NotPKColumnKeyFunc.KEY, new NotPKColumnKeyFunc());
         keyFuncMap.put(PartitionedTableWithoutDefaultKeyFunc.KEY, new PartitionedTableWithoutDefaultKeyFunc());
         keyFuncMap.put(PartitionedTableForNewPartitionKeyFunc.KEY, new PartitionedTableForNewPartitionKeyFunc());
@@ -45,7 +74,9 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
         keyFuncMap.put(DetachedPartitionCandidateKeyFunc.KEY, new DetachedPartitionCandidateKeyFunc());
         keyFuncMap.put(NewPartitionBoundKeyFunc.KEY, new NewPartitionBoundKeyFunc());
         keyFuncMap.put(InsertTargetTableKeyFunc.KEY, new InsertTargetTableKeyFunc());
+        keyFuncMap.put(InsertTargetTableWithoutRulesKeyFunc.KEY, new InsertTargetTableWithoutRulesKeyFunc());
         keyFuncMap.put(UpdatableTableKeyFunc.KEY, new UpdatableTableKeyFunc());
+        keyFuncMap.put(UpdatableTableWithoutRulesKeyFunc.KEY, new UpdatableTableWithoutRulesKeyFunc());
         keyFuncMap.put(PartitionAwareInsertValueKeyFunc.KEY, new PartitionAwareInsertValueKeyFunc());
         keyFuncMap.put(PartitionAwareInsertRowsKeyFunc.KEY, new PartitionAwareInsertRowsKeyFunc());
         keyFuncMap.put(VarcharTypeKeyFunc.KEY, new VarcharTypeKeyFunc());
@@ -140,6 +171,147 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
         }
     }
 
+    private class MaterializedViewKeyFunc implements KeyFunc {
+        public static final String KEY = "_materialized_view";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            List<String> materializedViews = new ArrayList<>();
+            String query = "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    + "WHERE n.nspname = 'public' AND c.relkind = 'm' ORDER BY c.relname";
+            try (Statement statement = ((SQLGlobalState) globalState).getConnection().createStatement();
+                    ResultSet resultSet = statement.executeQuery(query)) {
+                while (resultSet.next()) {
+                    materializedViews.add(resultSet.getString(1));
+                }
+            } catch (SQLException e) {
+                throw new QueryGenerationException("Unable to query materialized views: " + e.getMessage());
+            }
+            if (materializedViews.isEmpty()) {
+                throw new QueryGenerationException("There are no available materialized views.");
+            }
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, Randomly.fromList(materializedViews))));
+        }
+    }
+
+    private class TableWithPrimaryKeyKeyFunc implements KeyFunc {
+        public static final String KEY = "_table_with_primary_key";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLSchema schema = (PostgreSQLSchema) globalState.getSchema();
+            PostgreSQLTable table;
+            try {
+                table = schema.getRandomTable(t -> !t.isView() && getPrimaryKeyIndex(t) != null);
+            } catch (IgnoreMeException ignored) {
+                throw new QueryGenerationException("There are no tables with primary keys.");
+            }
+            rememberSelectedTable(table);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, table.getName())));
+        }
+    }
+
+    private class SelectedTableIndexKeyFunc implements KeyFunc {
+        public static final String KEY = "_selected_table_index";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLTable table = getSelectedTableOrNull();
+            if (table == null) {
+                throw new QueryGenerationException("No selected table for selected-table index lookup.");
+            }
+            List<TableIndex> indexes = table.getIndexes().stream()
+                    .filter(index -> !isPrimaryKeyIndex(index))
+                    .collect(Collectors.toList());
+            if (indexes.isEmpty()) {
+                throw new QueryGenerationException("No suitable selected-table index.");
+            }
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, Randomly.fromList(indexes).getName())));
+        }
+    }
+
+    private class SelectedTableUniqueIndexKeyFunc implements KeyFunc {
+        public static final String KEY = "_selected_table_unique_index";
+        private final boolean requireNotNullColumns;
+
+        SelectedTableUniqueIndexKeyFunc(boolean requireNotNullColumns) {
+            this.requireNotNullColumns = requireNotNullColumns;
+        }
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLTable table = getSelectedTableOrNull();
+            if (table == null) {
+                throw new QueryGenerationException("No selected table for selected-table index lookup.");
+            }
+            List<TableIndex> indexes = table.getIndexes().stream()
+                    .filter(TableIndex::isUnique)
+                    .filter(index -> !isPrimaryKeyIndex(index))
+                    .filter(index -> !requireNotNullColumns || allIndexedColumnsAreNotNull(table, index))
+                    .collect(Collectors.toList());
+            if (indexes.isEmpty()) {
+                throw new QueryGenerationException("No suitable selected-table unique index.");
+            }
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, Randomly.fromList(indexes).getName())));
+        }
+    }
+
+    private class SelectedTableUniqueNotNullIndexKeyFunc extends SelectedTableUniqueIndexKeyFunc {
+        public static final String KEY = "_selected_table_unique_not_null_index";
+
+        SelectedTableUniqueNotNullIndexKeyFunc() {
+            super(true);
+        }
+    }
+
+    private class SelectedTablePrimaryKeyConstraintKeyFunc implements KeyFunc {
+        public static final String KEY = "_selected_table_primary_key_constraint";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLTable table = getSelectedTableOrNull();
+            if (table == null) {
+                throw new QueryGenerationException("No selected table for primary-key constraint lookup.");
+            }
+            TableIndex primaryKeyIndex = getPrimaryKeyIndex(table);
+            if (primaryKeyIndex == null) {
+                throw new QueryGenerationException("No primary-key constraint on selected table.");
+            }
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, primaryKeyIndex.getName())));
+        }
+    }
+
+    private static boolean isPrimaryKeyIndex(TableIndex index) {
+        if (index instanceof PostgreSQLSchema.PostgreSQLIndex pgIndex) {
+            return pgIndex.isPrimaryKey();
+        }
+        return index.getName() != null && index.getName().contains("pkey");
+    }
+
+    private static TableIndex getPrimaryKeyIndex(PostgreSQLTable table) {
+        for (TableIndex index : table.getIndexes()) {
+            if (isPrimaryKeyIndex(index)) {
+                return index;
+            }
+        }
+        return null;
+    }
+
+    private static boolean allIndexedColumnsAreNotNull(PostgreSQLTable table, TableIndex index) {
+        if (index.getColumnNames() == null || index.getColumnNames().isEmpty()) {
+            return false;
+        }
+        for (String indexColumn : index.getColumnNames()) {
+            boolean foundNotNull = table.getColumns().stream()
+                    .filter(column -> Objects.equals(column.getName(), indexColumn))
+                    .anyMatch(AbstractTableColumn::isNotNull);
+            if (!foundNotNull) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * This key function is used to fetch a new constraint name. For example, ALTER
      * TABLE _TABLE ADD CONSTRAINT _new_constraint_name UNIQUE _index
@@ -158,6 +330,185 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
             }
             ASTNode tableNode = new ASTNode(new Token(Token.TokenType.TERMINAL, constraintName));
             parent.addChild(tableNode);
+        }
+    }
+
+    private class SequenceKeyFunc implements KeyFunc {
+        public static final String KEY = "_sequence";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            List<String> sequences = new ArrayList<>();
+            String query = "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    + "WHERE n.nspname = 'public' AND c.relkind = 'S' ORDER BY c.relname";
+            try (Statement statement = ((SQLGlobalState) globalState).getConnection().createStatement();
+                    ResultSet resultSet = statement.executeQuery(query)) {
+                while (resultSet.next()) {
+                    sequences.add(resultSet.getString(1));
+                }
+            } catch (SQLException e) {
+                throw new QueryGenerationException("Unable to query sequences: " + e.getMessage());
+            }
+            if (sequences.isEmpty()) {
+                throw new QueryGenerationException("There are no available sequences for _sequence.");
+            }
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, Randomly.fromList(sequences))));
+        }
+    }
+
+    private class NewSequenceNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_new_sequence_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            String prefix = globalState.getGeneratedObjectNamePrefix();
+            int suffix = Randomly.getNotCachedInteger(0, Integer.MAX_VALUE);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, prefix + "seq" + suffix)));
+        }
+    }
+
+    private class NewFunctionNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_new_function_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            String name = "public." + generatedName("fn");
+            currentContext.setProperty(SELECTED_FUNCTION_NAME, name);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, name)));
+        }
+    }
+
+    private class SelectedFunctionNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_selected_function_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    requireStringProperty(SELECTED_FUNCTION_NAME, "No selected function name."))));
+        }
+    }
+
+    private class NewProcedureNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_new_procedure_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            String name = "public." + generatedName("proc");
+            currentContext.setProperty(SELECTED_PROCEDURE_NAME, name);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, name)));
+        }
+    }
+
+    private class SelectedProcedureNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_selected_procedure_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    requireStringProperty(SELECTED_PROCEDURE_NAME, "No selected procedure name."))));
+        }
+    }
+
+    private class FunctionSignatureKeyFunc extends RoutineSignatureKeyFunc {
+        public static final String KEY = "_function_signature";
+
+        FunctionSignatureKeyFunc() {
+            super("f", "There are no available functions for _function_signature.");
+        }
+    }
+
+    private class ProcedureSignatureKeyFunc extends RoutineSignatureKeyFunc {
+        public static final String KEY = "_procedure_signature";
+
+        ProcedureSignatureKeyFunc() {
+            super("p", "There are no available procedures for _procedure_signature.");
+        }
+    }
+
+    private class RoutineSignatureKeyFunc implements KeyFunc {
+        private final String proKind;
+        private final String emptyMessage;
+
+        RoutineSignatureKeyFunc(String proKind, String emptyMessage) {
+            this.proKind = proKind;
+            this.emptyMessage = emptyMessage;
+        }
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            List<String> routines = new ArrayList<>();
+            String query = "SELECT quote_ident(n.nspname) || '.' || quote_ident(p.proname) || '(' "
+                    + "|| pg_get_function_identity_arguments(p.oid) || ')' "
+                    + "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    + "WHERE n.nspname = 'public' AND p.prokind = '" + proKind + "' "
+                    + "ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)";
+            try (Statement statement = ((SQLGlobalState) globalState).getConnection().createStatement();
+                    ResultSet resultSet = statement.executeQuery(query)) {
+                while (resultSet.next()) {
+                    routines.add(resultSet.getString(1));
+                }
+            } catch (SQLException e) {
+                throw new QueryGenerationException("Unable to query routine signatures: " + e.getMessage());
+            }
+            if (routines.isEmpty()) {
+                throw new QueryGenerationException(emptyMessage);
+            }
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, Randomly.fromList(routines))));
+        }
+    }
+
+    private class NewRuleNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_new_rule_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            String name = generatedName("rule");
+            currentContext.setProperty(SELECTED_RULE_NAME, name);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, name)));
+        }
+    }
+
+    private class SelectedRuleNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_selected_rule_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    requireStringProperty(SELECTED_RULE_NAME, "No selected rule name."))));
+        }
+    }
+
+    private class NewStressTriggerNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_new_stress_trigger_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            String name = generatedName("trg");
+            currentContext.setProperty(SELECTED_TRIGGER_NAME, name);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, name)));
+        }
+    }
+
+    private class SelectedTriggerNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_selected_trigger_name";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL,
+                    requireStringProperty(SELECTED_TRIGGER_NAME, "No selected trigger name."))));
+        }
+    }
+
+    private class SelectedTableNameKeyFunc implements KeyFunc {
+        public static final String KEY = "_selected_table";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLTable table = getSelectedTableOrNull();
+            if (table == null) {
+                throw new QueryGenerationException("No selected table.");
+            }
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, table.getName())));
         }
     }
 
@@ -305,6 +656,27 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
         }
     }
 
+    private class InsertTargetTableWithoutRulesKeyFunc implements KeyFunc {
+        public static final String KEY = "_insert_target_table_without_rules";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLSchema schema = (PostgreSQLSchema) globalState.getSchema();
+            Set<String> tablesWithRules = getTablesWithInsertOrUpdateRules();
+            PostgreSQLTable table;
+            try {
+                table = schema.getRandomTable(t -> !t.isView()
+                        && !t.isPartition()
+                        && !tablesWithRules.contains(t.getName())
+                        && (!t.isPartitionedTable() || PostgreSQLPartitionSupport.hasUsableInsertRoute(schema, t)));
+            } catch (IgnoreMeException ignored) {
+                throw new QueryGenerationException("There is no insert target table without INSERT/UPDATE rules.");
+            }
+            rememberSelectedTable(table);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, table.getName())));
+        }
+    }
+
     private class UpdatableTableKeyFunc implements KeyFunc {
         public static final String KEY = "_updatable_table";
 
@@ -316,6 +688,27 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
                 table = schema.getRandomUpdatableTable();
             } catch (IgnoreMeException ignored) {
                 throw new QueryGenerationException("There is no available updatable table.");
+            }
+            rememberSelectedTable(table);
+            parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, table.getName())));
+        }
+    }
+
+    private class UpdatableTableWithoutRulesKeyFunc implements KeyFunc {
+        public static final String KEY = "_updatable_table_without_rules";
+
+        @Override
+        public void generateAST(ASTNode parent) {
+            PostgreSQLSchema schema = (PostgreSQLSchema) globalState.getSchema();
+            Set<String> tablesWithRules = getTablesWithInsertOrUpdateRules();
+            PostgreSQLTable table;
+            try {
+                table = schema.getRandomTable(t -> !t.isView()
+                        && !t.isPartition()
+                        && !t.isPartitionedTable()
+                        && !tablesWithRules.contains(t.getName()));
+            } catch (IgnoreMeException ignored) {
+                throw new QueryGenerationException("There is no updatable table without INSERT/UPDATE rules.");
             }
             rememberSelectedTable(table);
             parent.addChild(new ASTNode(new Token(Token.TokenType.TERMINAL, table.getName())));
@@ -491,6 +884,36 @@ public class PostgreSQLKeyFunctionManager extends KeyFuncManager {
         int precision = randomUpperHalfTypeModifier();
         int scale = Randomly.getNotCachedInteger(precision / 2, precision);
         return String.format("(%d,%d)", precision, scale);
+    }
+
+    private String generatedName(String stem) {
+        String prefix = globalState.getGeneratedObjectNamePrefix();
+        int suffix = Randomly.getNotCachedInteger(0, Integer.MAX_VALUE);
+        return prefix + stem + suffix;
+    }
+
+    private String requireStringProperty(String key, String errorMessage) {
+        Object value = currentContext.getProperty(key);
+        if (!(value instanceof String)) {
+            throw new QueryGenerationException(errorMessage);
+        }
+        return (String) value;
+    }
+
+    private Set<String> getTablesWithInsertOrUpdateRules() {
+        Set<String> tableNames = new HashSet<>();
+        String query = "SELECT DISTINCT tablename FROM pg_rules "
+                + "WHERE rulename <> '_RETURN' "
+                + "AND (definition ILIKE '%ON INSERT TO%' OR definition ILIKE '%ON UPDATE TO%')";
+        try (Statement statement = ((SQLGlobalState) globalState).getConnection().createStatement();
+                ResultSet resultSet = statement.executeQuery(query)) {
+            while (resultSet.next()) {
+                tableNames.add(resultSet.getString(1));
+            }
+        } catch (SQLException e) {
+            throw new QueryGenerationException("Unable to query INSERT/UPDATE rules: " + e.getMessage());
+        }
+        return tableNames;
     }
 
     private PostgreSQLTable getSelectedPartitionedTable() {
