@@ -64,7 +64,7 @@ public final class PostgreSQLPartitionWorkload {
             writer.write(String.format("-- Partition workload thread %d%n", threadId));
 
             long seedBase = 6000L + threadId * 100;
-            executeGenerated(state, writer, "create_partitioned_table", seedBase + 1);
+            executeGenerated(state, writer, "create_ppp", seedBase + 1);
             state.updateSchema();
             if (hasPartitionedTableForNewPartition(state.getSchema())) {
                 executeGenerated(state, writer, "create_table_partition", seedBase + 2);
@@ -144,7 +144,7 @@ public final class PostgreSQLPartitionWorkload {
     private static String chooseRandomRoot(PostgreSQLGlobalState state, long seed) throws Exception {
         PostgreSQLSchema schema = state.getSchema();
         List<String> candidates = new ArrayList<>();
-        candidates.add("create_partitioned_table");
+        candidates.add("create_ppp");
         if (hasPartitionedTableForNewPartition(schema)) {
             candidates.add("create_table_partition");
         }
